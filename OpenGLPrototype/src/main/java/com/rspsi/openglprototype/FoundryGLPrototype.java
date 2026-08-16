@@ -8,6 +8,7 @@ import com.jogamp.opengl.GLCapabilities;
 import com.jogamp.opengl.GLEventListener;
 import com.jogamp.opengl.GLProfile;
 import com.jogamp.opengl.util.Animator;
+import org.joml.Matrix4f;
 
 /**
  * First Foundry OpenGL milestone.
@@ -20,6 +21,7 @@ public final class FoundryGLPrototype implements GLEventListener {
     private long lastFpsNanos = System.nanoTime();
     private final TerrainGpuBuffer testGeometry = new TerrainGpuBuffer();
     private final SimpleTerrainShader shader = new SimpleTerrainShader();
+    private final Matrix4f identity = new Matrix4f();
 
     public static void main(String[] args) {
         GLProfile.initSingleton();
@@ -69,6 +71,7 @@ public final class FoundryGLPrototype implements GLEventListener {
         gl.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT);
 
         shader.use(gl);
+        shader.setViewProjection(gl, identity);
         testGeometry.draw(gl);
 
         frames++;
