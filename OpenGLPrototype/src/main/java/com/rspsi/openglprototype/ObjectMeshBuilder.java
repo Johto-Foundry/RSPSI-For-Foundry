@@ -10,6 +10,7 @@ import com.jagex.map.object.GameObject;
 import com.jagex.map.object.WallDecoration;
 import com.jagex.map.tile.SceneTile;
 
+import java.lang.reflect.Field;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.IdentityHashMap;
@@ -17,7 +18,29 @@ import java.util.Set;
 
 /** Converts RSPSi's already-resolved scene models into GPU triangles. */
 public final class ObjectMeshBuilder {
+    private static final Field TEXTURE_COORDINATES_FIELD = findTextureCoordinatesField();
+
     private ObjectMeshBuilder() {}
+
+    private static Field findTextureCoordinatesField() {
+        try {
+            Field field = Mesh.class.getDeclaredField("texture_coordinates");
+            field.setAccessible(true);
+            return field;
+        } catch (ReflectiveOperationException ex) {
+            System.out.println("[OPENGL-OBJECTS] Could not access Mesh texture coordinates; exact mapped UVs disabled.");
+            return null;
+        }
+    }
+
+    private static byte[] textureCoordinates(Mesh mesh) {
+        if (TEXTURE_COORDINATES_FIELD == null || mesh == null) return null;
+        try {
+            return (byte[]) TEXTURE_COORDINATES_FIELD.get(mesh);
+        } catch (IllegalAccessException | ClassCastException ex) {
+            return null;
+        }
+    }
 
     public static TerrainMeshSnapshot build(int plane) {
         Client client = Client.getSingleton();
@@ -110,14 +133,16 @@ public final class ObjectMeshBuilder {
 
     /**
      * Reconstruct UVs from the same texture-mapping triangle the software Mesh
-     * renderer passes to drawTexturedTriangle. The mapping vertices define the
-     * texture basis; each rendered face vertex is expressed in that basis.
+     * renderer passes to drawTexturedTriangle. texture_coordinates is protected
+     * in the legacy Mesh class, so it is read through one cached reflective field
+     * rather than modifying the core client model API for this prototype.
      */
     private static float[][] mappedUvs(Mesh m,int face,int a,int b,int c,int vertexCount){
-        if(m.texture_coordinates==null||face>=m.texture_coordinates.length||m.texture_coordinates[face]==-1
+        byte[] coordinates = textureCoordinates(m);
+        if(coordinates==null||face>=coordinates.length||coordinates[face]==-1
                 ||m.textureMappingP==null||m.textureMappingM==null||m.textureMappingN==null)return null;
-        int t=m.texture_coordinates[face]&0xff;
-        if(t<0||t>=m.textureMappingP.length||t>=m.textureMappingM.length||t>=m.textureMappingN.length)return null;
+        int t=coordinates[face]&0xff;
+        if(t>=m.textureMappingP.length||t>=m.textureMappingM.length||t>=m.textureMappingN.length)return null;
         int p=m.textureMappingP[t],q=m.textureMappingM[t],r=m.textureMappingN[t];
         if(!valid(p,vertexCount)||!valid(q,vertexCount)||!valid(r,vertexCount))return null;
         return new float[][]{basisUv(m,p,q,r,a),basisUv(m,p,q,r,b),basisUv(m,p,q,r,c)};
