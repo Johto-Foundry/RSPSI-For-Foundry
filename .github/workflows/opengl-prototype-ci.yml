@@ -1,0 +1,23 @@
+name: OpenGL prototype CI
+
+on:
+  push:
+    branches:
+      - renderer-opengl-experimental
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '8'
+      - name: Build working editor and OpenGL prototype
+        run: |
+          chmod +x gradlew
+          ./gradlew :Editor:classes :OpenGLPrototype:classes --stacktrace
