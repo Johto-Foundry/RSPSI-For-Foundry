@@ -1,0 +1,86 @@
+name: Bootstrap Foundry RSPSi
+
+on:
+  push:
+    paths:
+      - '.github/workflows/bootstrap-rspsi.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Foundry repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Clone upstream RSPSi
+        run: git clone --depth 1 https://github.com/RSPSi/RSPSi.git /tmp/rspsi
+
+      - name: Import upstream source
+        run: |
+          rsync -a --delete \
+            --exclude='.git/' \
+            --exclude='.github/' \
+            /tmp/rspsi/ ./
+
+      - name: Keep only Foundry-relevant plugins
+        shell: bash
+        run: |
+          find Plugins -mindepth 1 -maxdepth 1 -type d \
+            ! -name 'OSRSPlugin' \
+            ! -name 'OSRS317Plugin' \
+            ! -name 'Plugin317' \
+            -exec rm -rf {} +
+
+      - name: Configure Gradle modules
+        run: |
+          cat > settings.gradle <<'EOF'
+          rootProject.name = 'RSPSiSuite'
+
+          include ':Client'
+          include ':Editor'
+          include ':Plugins'
+          include ':RS-Cache-Library'
+
+          include 'Plugins:OSRS317Plugin'
+          include 'Plugins:OSRSPlugin'
+          include 'Plugins:Plugin317'
+          EOF
+
+      - name: Write Foundry README
+        run: |
+          cat > README.md <<'EOF'
+          # RSPSI for Foundry
+
+          Private Foundry-maintained build of the open-source RSPSi map editor.
+
+          This repository starts from the upstream RSPSi codebase and intentionally retains only the cache plugins useful to Foundry:
+
+          - `OSRSPlugin`
+          - `OSRS317Plugin`
+          - `Plugin317`
+
+          The initial baseline intentionally preserves the upstream Java 8 / JavaFX-compatible runtime and renderer so performance work can be measured independently from a runtime migration.
+
+          ## Upstream
+
+          Original project: `RSPSi/RSPSi`
+
+          RSPSi is distributed under the MIT License. The original copyright and license notice are retained in `LICENSE`.
+          EOF
+
+      - name: Commit imported baseline
+        run: |
+          git config user.name 'Johto-Foundry'
+          git config user.email '314530853+Johto-Foundry@users.noreply.github.com'
+          git add -A
+          if git diff --cached --quiet; then
+            echo 'No changes to commit.'
+          else
+            git commit -m 'Import RSPSi baseline and remove unused plugins'
+            git push origin HEAD:main
+          fi
