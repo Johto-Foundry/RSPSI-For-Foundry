@@ -60,12 +60,20 @@ public final class TerrainMeshBuilder {
     private static boolean appendSimple(Chunk chunk,int plane,int x,int y,SimpleTile t,FloatCollector p,FloatCollector c,FloatCollector uv,FloatCollector tex,IntCollector ind){
         float x0=x*TILE_SIZE,x1=(x+1)*TILE_SIZE,z0=y*TILE_SIZE,z1=(y+1)*TILE_SIZE;
         float h00=-chunk.mapRegion.tileHeights[plane][x][y],h10=-chunk.mapRegion.tileHeights[plane][x+1][y],h01=-chunk.mapRegion.tileHeights[plane][x][y+1],h11=-chunk.mapRegion.tileHeights[plane][x+1][y+1];
-        int floor=resolveTileRgb(chunk,plane,x,y), textureId=t.getTexture(), fb=textureId>=0?paletteRgb(t.getColour(),floor):floor;
+        int floor=resolveTileRgb(chunk,plane,x,y);
+        // The raw texture field is not, by itself, proof that RSPSi intended this
+        // SimpleTile to be texture sampled.  SimpleTile carries an explicit
+        // `textured` decision after editor/HD-texture options are applied.  Using
+        // texture>=0 here caused ordinary colour-shaded terrain to sample whatever
+        // cache texture happened to occupy that ID (the repeated wooden-door look).
+        boolean hasTexture=t.isTextured()&&t.getTexture()>=0;
+        int textureId=hasTexture?t.getTexture():-1;
+        int fb=hasTexture?paletteRgb(t.getColour(),floor):floor;
         int centre=paletteRgb(t.getCentreColour(),fb),east=paletteRgb(t.getEastColour(),fb),north=paletteRgb(t.getNorthColour(),fb),ne=paletteRgb(t.getNorthEastColour(),fb);
         int base=p.size/3;
         vertex(p,c,uv,tex,x0,h00,z0,centre,textureId); vertex(p,c,uv,tex,x0,h01,z1,north,textureId); vertex(p,c,uv,tex,x1,h10,z0,east,textureId);
         vertex(p,c,uv,tex,x1,h10,z0,east,textureId); vertex(p,c,uv,tex,x0,h01,z1,north,textureId); vertex(p,c,uv,tex,x1,h11,z1,ne,textureId);
-        for(int i=0;i<6;i++)ind.add(base+i); return textureId>=0;
+        for(int i=0;i<6;i++)ind.add(base+i); return hasTexture;
     }
 
     private static void appendFallback(Chunk chunk,int plane,int x,int y,FloatCollector p,FloatCollector c,FloatCollector uv,FloatCollector tex,IntCollector ind){
@@ -77,7 +85,6 @@ public final class TerrainMeshBuilder {
 
     private static void vertex(FloatCollector p,FloatCollector c,FloatCollector uv,FloatCollector tex,float x,float y,float z,int rgb,int textureId){
         p.add(x);p.add(y);p.add(z); c.add(((rgb>>16)&255)/255f);c.add(((rgb>>8)&255)/255f);c.add((rgb&255)/255f);
-        // World-space UVs deliberately repeat once per 128-unit RuneScape tile.
         uv.add(x/TILE_SIZE);uv.add(z/TILE_SIZE); tex.add(textureId);
     }
 
