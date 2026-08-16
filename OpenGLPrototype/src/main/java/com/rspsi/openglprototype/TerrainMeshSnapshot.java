@@ -8,6 +8,10 @@ public final class TerrainMeshSnapshot {
     private final float[] textureIds;
     private final int[] indices;
 
+    public TerrainMeshSnapshot(float[] positions, int[] indices) {
+        this(positions, defaultColours(positions.length / 3), indices);
+    }
+
     public TerrainMeshSnapshot(float[] positions, float[] colours, int[] indices) {
         this(positions, colours, defaultTexCoords(positions.length / 3), defaultTextureIds(positions.length / 3), indices);
     }
@@ -28,6 +32,17 @@ public final class TerrainMeshSnapshot {
         this.texCoords = texCoords;
         this.textureIds = textureIds;
         this.indices = indices;
+    }
+
+    private static float[] defaultColours(int vertexCount) {
+        float[] colours = new float[vertexCount * 3];
+        for (int i = 0; i < vertexCount; i++) {
+            int p = i * 3;
+            colours[p] = 0.64f;
+            colours[p + 1] = 0.78f;
+            colours[p + 2] = 0.46f;
+        }
+        return colours;
     }
 
     private static float[] defaultTexCoords(int vertexCount) {
