@@ -1144,12 +1144,17 @@ public final class Client implements Runnable {
 		double setupMs = (System.nanoTime() - stageStart) / 1_000_000.0;
 
 		stageStart = System.nanoTime();
+		double[] chunkTimesMs = new double[chunks.size()];
+		int chunkIndex = 0;
 		for (Chunk chunk : chunks) {
+			long chunkStart = System.nanoTime();
 			try {
 				sceneGraph.setChunk(chunk);
 				sceneGraph.renderScene(xCameraPos, yCameraPos, xCameraCurve, zCameraPos, currentPlane, yCameraCurve);
 			} catch (Exception ex) {
 				ex.printStackTrace();
+			} finally {
+				chunkTimesMs[chunkIndex++] = (System.nanoTime() - chunkStart) / 1_000_000.0;
 			}
 		}
 		double chunksMs = (System.nanoTime() - stageStart) / 1_000_000.0;
@@ -1189,6 +1194,12 @@ public final class Client implements Runnable {
 			lastRenderBreakdownLog = now;
 			System.out.printf("[RENDER] total=%.2f ms | anim=%.2f | setup=%.2f | chunks=%.2f | cycle=%.2f | cleanup=%.2f | debug=%.2f | finalize=%.2f | loadedChunks=%d%n",
 				totalMs, animablesMs, setupMs, chunksMs, cycleEndMs, cleanupMs, debugMs, finalizeMs, chunks.size());
+			StringBuilder chunkLine = new StringBuilder("[CHUNKS]");
+			for (int index = 0; index < chunkTimesMs.length; index++) {
+				Chunk timedChunk = chunks.get(index);
+				chunkLine.append(String.format(" #%d(%d,%d)=%.2fms", index, timedChunk.regionX, timedChunk.regionY, chunkTimesMs[index]));
+			}
+			System.out.println(chunkLine.toString());
 		}
 	}
 
