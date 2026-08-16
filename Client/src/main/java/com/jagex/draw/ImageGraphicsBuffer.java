@@ -8,7 +8,6 @@ import java.awt.image.DataBufferInt;
 import java.awt.image.DirectColorModel;
 import java.awt.image.Raster;
 import java.nio.IntBuffer;
-import java.util.Arrays;
 import java.util.Hashtable;
 
 import com.jagex.draw.raster.GameRaster;
@@ -24,6 +23,8 @@ import net.coobird.thumbnailator.resizers.Resizer;
 public class ImageGraphicsBuffer extends ProducingGraphicsBuffer {
 	
 	public WritableImage finalImage;
+	private final int[] fxPixels;
+	private final IntBuffer fxPixelBuffer;
 
 	public ImageGraphicsBuffer(int width, int height, GameRaster raster) {
 		super.pixels = new int[width * height + 1];
@@ -34,6 +35,8 @@ public class ImageGraphicsBuffer extends ProducingGraphicsBuffer {
 				false, new Hashtable<>());
 		super.raster = raster;
 		finalImage = new WritableImage(width, height);
+		fxPixels = new int[width * height];
+		fxPixelBuffer = IntBuffer.wrap(fxPixels);
 		super.setWidth(width);
 		super.setHeight(height);
 	
@@ -61,10 +64,11 @@ public class ImageGraphicsBuffer extends ProducingGraphicsBuffer {
 	}
 
 	public void finalize() {
-		int[] pixelCopy = Arrays.copyOf(pixels, pixels.length);
-		for(int i = 0;i<pixelCopy.length;i++)
-			pixelCopy[i] = 0xFF000000 | pixelCopy[i];
-		finalImage.getPixelWriter().setPixels(0, 0, getWidth(), getHeight(), PixelFormat.getIntArgbInstance(), IntBuffer.wrap(pixelCopy), getWidth());
+		for (int i = 0; i < fxPixels.length; i++) {
+			fxPixels[i] = 0xFF000000 | pixels[i];
+		}
+		fxPixelBuffer.rewind();
+		finalImage.getPixelWriter().setPixels(0, 0, getWidth(), getHeight(), PixelFormat.getIntArgbInstance(), fxPixelBuffer, getWidth());
 	}
 	
 	@Override
