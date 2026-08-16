@@ -2576,8 +2576,8 @@ public class SceneGraph {
 	}
 
 	public void renderScene(int cameraTileX, int cameraTileY, int k, int cameraTileZ, int cameraPlane, int j1) {
-		/*if (!sceneVisible(cameraTileX, cameraTileY))
-			return;*/
+		if (!sceneVisible(cameraTileX, cameraTileY))
+			return;
 		xCameraTile = cameraTileX;
 		zCameraTile = cameraTileZ;
 		yCameraTile = cameraTileY;
