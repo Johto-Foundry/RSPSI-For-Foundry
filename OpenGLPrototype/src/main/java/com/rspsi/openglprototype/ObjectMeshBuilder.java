@@ -19,6 +19,7 @@ import java.util.Set;
 /** Converts RSPSi's already-resolved scene models into GPU triangles. */
 public final class ObjectMeshBuilder {
     private static final Field TEXTURE_COORDINATES_FIELD = findTextureCoordinatesField();
+    private static final float MODEL_TEXTURE_MARKER = 1000.0f;
 
     private ObjectMeshBuilder() {}
 
@@ -35,11 +36,8 @@ public final class ObjectMeshBuilder {
 
     private static byte[] textureCoordinates(Mesh mesh) {
         if (TEXTURE_COORDINATES_FIELD == null || mesh == null) return null;
-        try {
-            return (byte[]) TEXTURE_COORDINATES_FIELD.get(mesh);
-        } catch (IllegalAccessException | ClassCastException ex) {
-            return null;
-        }
+        try { return (byte[]) TEXTURE_COORDINATES_FIELD.get(mesh); }
+        catch (IllegalAccessException | ClassCastException ex) { return null; }
     }
 
     public static TerrainMeshSnapshot build(int plane) {
@@ -69,6 +67,7 @@ public final class ObjectMeshBuilder {
 
         System.out.println("[OPENGL-OBJECTS] objects="+stats.objects+" meshes="+stats.meshes+" faces="+stats.faces
                 +" texturedFaces="+stats.texturedFaces+" mappedFaces="+stats.mappedFaces
+                +" flatFaces="+stats.flatFaces+" flatTexturedFaces="+stats.flatTexturedFaces
                 +" alphaSkipped="+stats.alphaSkipped+" triangles="+(indices.size/3));
         return new TerrainMeshSnapshot(positions.toArray(),colours.toArray(),uvs.toArray(),textureIds.toArray(),indices.toArray());
     }
@@ -115,28 +114,31 @@ public final class ObjectMeshBuilder {
             if(!valid(a,vc)||!valid(b,vc)||!valid(c,vc))continue;
 
             int textureId=(m.faceTextures!=null&&face<m.faceTextures.length)?m.faceTextures[face]:-1;
-            boolean textured=textureId>=0;
+            int type = m.faceTypes == null ? (textureId >= 0 ? 2 : 0) : (m.faceTypes[face] & 3);
+            boolean textured=(type==2||type==3) && textureId>=0;
+            boolean flat=(type==1||type==3);
             if(textured)stats.texturedFaces++;
+            if(flat)stats.flatFaces++;
+            if(type==3)stats.flatTexturedFaces++;
             stats.faces++;
 
             float[][] faceUv = textured ? mappedUvs(m,face,a,b,c,vc) : null;
             if(faceUv!=null)stats.mappedFaces++;
             if(faceUv==null)faceUv=new float[][]{{0,0},{1,0},{0,1}};
 
+            int rgbA=faceColour(m,face,0,textured,flat);
+            int rgbB=faceColour(m,face,1,textured,flat);
+            int rgbC=faceColour(m,face,2,textured,flat);
+            float gpuTextureId=textured ? MODEL_TEXTURE_MARKER+textureId : -1.0f;
+
             int base=p.size/3;
-            appendVertex(m,a,worldX,worldZ,renderHeight,sin,cos,faceColour(m,face,0,textured),textureId,faceUv[0],p,col,uv,tex);
-            appendVertex(m,b,worldX,worldZ,renderHeight,sin,cos,faceColour(m,face,1,textured),textureId,faceUv[1],p,col,uv,tex);
-            appendVertex(m,c,worldX,worldZ,renderHeight,sin,cos,faceColour(m,face,2,textured),textureId,faceUv[2],p,col,uv,tex);
+            appendVertex(m,a,worldX,worldZ,renderHeight,sin,cos,rgbA,gpuTextureId,faceUv[0],p,col,uv,tex);
+            appendVertex(m,b,worldX,worldZ,renderHeight,sin,cos,rgbB,gpuTextureId,faceUv[1],p,col,uv,tex);
+            appendVertex(m,c,worldX,worldZ,renderHeight,sin,cos,rgbC,gpuTextureId,faceUv[2],p,col,uv,tex);
             ind.add(base);ind.add(base+1);ind.add(base+2);
         }
     }
 
-    /**
-     * Reconstruct UVs from the same texture-mapping triangle the software Mesh
-     * renderer passes to drawTexturedTriangle. texture_coordinates is protected
-     * in the legacy Mesh class, so it is read through one cached reflective field
-     * rather than modifying the core client model API for this prototype.
-     */
     private static float[][] mappedUvs(Mesh m,int face,int a,int b,int c,int vertexCount){
         byte[] coordinates = textureCoordinates(m);
         if(coordinates==null||face>=coordinates.length||coordinates[face]==-1
@@ -165,7 +167,7 @@ public final class ObjectMeshBuilder {
     }
 
     private static void appendVertex(Mesh m,int v,int worldX,int worldZ,int renderHeight,float sin,float cos,int rgb,
-                                     int textureId,float[] faceUv,FloatCollector p,FloatCollector col,FloatCollector uv,FloatCollector tex){
+                                     float textureId,float[] faceUv,FloatCollector p,FloatCollector col,FloatCollector uv,FloatCollector tex){
         float lx=m.verticesX[v],ly=m.verticesY[v],lz=m.verticesZ[v];
         float rx=lx*cos+lz*sin,rz=lz*cos-lx*sin;
         p.add(worldX+rx);p.add(-renderHeight-ly);p.add(worldZ+rz);
@@ -173,21 +175,27 @@ public final class ObjectMeshBuilder {
         uv.add(faceUv[0]);uv.add(faceUv[1]);tex.add(textureId);
     }
 
-    private static int faceColour(Mesh m,int face,int corner,boolean textured){
-        int hsl=-1;
-        if(corner==0&&m.shadedFaceColoursX!=null&&face<m.shadedFaceColoursX.length)hsl=m.shadedFaceColoursX[face];
-        if(corner==1&&m.shadedFaceColoursY!=null&&face<m.shadedFaceColoursY.length)hsl=m.shadedFaceColoursY[face];
-        if(corner==2&&m.shadedFaceColoursZ!=null&&face<m.shadedFaceColoursZ.length)hsl=m.shadedFaceColoursZ[face];
-        if(textured){int light=hsl<0?96:Math.max(0,Math.min(127,hsl));int v=Math.max(72,Math.min(255,88+light));return(v<<16)|(v<<8)|v;}
-        if(hsl<0&&m.faceColours!=null&&face<m.faceColours.length)hsl=m.faceColours[face];
+    private static int faceColour(Mesh m,int face,int corner,boolean textured,boolean flat){
+        int shade=-1;
+        if(m.shadedFaceColoursX!=null&&face<m.shadedFaceColoursX.length)shade=m.shadedFaceColoursX[face];
+        if(!flat){
+            if(corner==1&&m.shadedFaceColoursY!=null&&face<m.shadedFaceColoursY.length)shade=m.shadedFaceColoursY[face];
+            if(corner==2&&m.shadedFaceColoursZ!=null&&face<m.shadedFaceColoursZ.length)shade=m.shadedFaceColoursZ[face];
+        }
+        if(textured){
+            int s=shade<0?0:Math.max(0,Math.min(127,shade));
+            int v=Math.round((s/127.0f)*255.0f);
+            return(v<<16)|(v<<8)|v;
+        }
+        if(shade<0&&m.faceColours!=null&&face<m.faceColours.length)shade=m.faceColours[face];
         GameRasterizer r=GameRasterizer.getInstance();
-        if(hsl>=0&&r!=null&&r.colourPalette!=null&&hsl<r.colourPalette.length){int rgb=r.colourPalette[hsl]&0xffffff;if(rgb!=0)return rgb;}
+        if(shade>=0&&r!=null&&r.colourPalette!=null&&shade<r.colourPalette.length){int rgb=r.colourPalette[shade]&0xffffff;if(rgb!=0)return rgb;}
         return 0x9b927b;
     }
 
     private static boolean valid(int i,int n){return i>=0&&i<n;}
     private static TerrainMeshSnapshot empty(){return new TerrainMeshSnapshot(new float[0],new float[0],new float[0],new float[0],new int[0]);}
-    private static final class Stats{int objects,meshes,faces,texturedFaces,mappedFaces,alphaSkipped;}
+    private static final class Stats{int objects,meshes,faces,texturedFaces,mappedFaces,flatFaces,flatTexturedFaces,alphaSkipped;}
     private static final class FloatCollector{private float[]data;private int size;FloatCollector(int cap){data=new float[Math.max(32,cap)];}void add(float v){if(size==data.length)data=Arrays.copyOf(data,data.length*2);data[size++]=v;}float[]toArray(){return Arrays.copyOf(data,size);}}
     private static final class IntCollector{private int[]data;private int size;IntCollector(int cap){data=new int[Math.max(32,cap)];}void add(int v){if(size==data.length)data=Arrays.copyOf(data,data.length*2);data[size++]=v;}int[]toArray(){return Arrays.copyOf(data,size);}}
 }
