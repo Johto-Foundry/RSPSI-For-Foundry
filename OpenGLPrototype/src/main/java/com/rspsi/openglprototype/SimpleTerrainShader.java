@@ -3,7 +3,7 @@ package com.rspsi.openglprototype;
 import com.jogamp.opengl.GL3;
 import org.joml.Matrix4f;
 
-/** Terrain shader with cache texture-array sampling and colour fallback. */
+/** Terrain/model shader with cache texture-array sampling and colour fallback. */
 public final class SimpleTerrainShader {
     private static final String VERTEX =
             "#version 330 core\n" +
@@ -13,7 +13,7 @@ public final class SimpleTerrainShader {
     private static final String FRAGMENT =
             "#version 330 core\n" +
             "in vec3 vColour; in vec2 vTexCoord; flat in int vTextureId; uniform sampler2DArray uTextures; uniform int uTextureCount; out vec4 fragColor;\n" +
-            "void main(){if(vTextureId>=0&&vTextureId<uTextureCount){vec4 tex=texture(uTextures,vec3(fract(vTexCoord),float(vTextureId)));if(tex.a<0.05)discard;float light=clamp(0.58+dot(vColour,vec3(0.2126,0.7152,0.0722))*0.55,0.55,1.12);fragColor=vec4(tex.rgb*light,tex.a);}else fragColor=vec4(vColour,1.0);}\n";
+            "void main(){if(vTextureId>=0&&vTextureId<uTextureCount){vec4 tex=texture(uTextures,vec3(fract(vTexCoord),float(vTextureId)));if(tex.a<0.50)discard;float light=clamp(0.58+dot(vColour,vec3(0.2126,0.7152,0.0722))*0.55,0.55,1.12);fragColor=vec4(tex.rgb*light,1.0);}else fragColor=vec4(vColour,1.0);}\n";
 
     private final TerrainTextureArray textures=new TerrainTextureArray();
     private int program,viewProjectionLocation=-1,textureCountLocation=-1;
