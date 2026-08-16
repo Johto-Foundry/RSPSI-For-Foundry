@@ -13,7 +13,8 @@ public final class SimpleTerrainShader {
     private static final String FRAGMENT =
             "#version 330 core\n" +
             "in vec3 vColour; in vec2 vTexCoord; flat in int vTextureId; flat in int vModelTexture; uniform sampler2DArray uTextures; uniform int uTextureCount; out vec4 fragColor;\n" +
-            "void main(){if(vTextureId>=0&&vTextureId<uTextureCount){vec4 tex=texture(uTextures,vec3(fract(vTexCoord),float(vTextureId)));if(tex.a<0.50)discard;if(vModelTexture==1){float shade=clamp(vColour.r,0.0,1.0)*127.0;int bank=(int(floor(shade/16.0))&3);float factor=bank==0?1.0:(bank==1?0.875:(bank==2?0.75:0.625));fragColor=vec4(tex.rgb*factor,1.0);}else{float light=clamp(0.58+dot(vColour,vec3(0.2126,0.7152,0.0722))*0.55,0.55,1.12);fragColor=vec4(tex.rgb*light,1.0);}}else fragColor=vec4(vColour,1.0);}\n";
+            "float exactCutoutAlpha(int layer, vec2 uv){vec2 wrapped=fract(uv);ivec2 texel=ivec2(floor(wrapped*128.0));texel=clamp(texel,ivec2(0),ivec2(127));return texelFetch(uTextures,ivec3(texel,layer),0).a;}\n" +
+            "void main(){if(vTextureId>=0&&vTextureId<uTextureCount){if(exactCutoutAlpha(vTextureId,vTexCoord)<0.50)discard;vec4 tex=texture(uTextures,vec3(fract(vTexCoord),float(vTextureId)));if(vModelTexture==1){float shade=clamp(vColour.r,0.0,1.0)*127.0;int bank=(int(floor(shade/16.0))&3);float factor=bank==0?1.0:(bank==1?0.875:(bank==2?0.75:0.625));fragColor=vec4(tex.rgb*factor,1.0);}else{float light=clamp(0.58+dot(vColour,vec3(0.2126,0.7152,0.0722))*0.55,0.55,1.12);fragColor=vec4(tex.rgb*light,1.0);}}else fragColor=vec4(vColour,1.0);}\n";
 
     private final TerrainTextureArray textures=new TerrainTextureArray();
     private int program,viewProjectionLocation=-1,textureCountLocation=-1;
