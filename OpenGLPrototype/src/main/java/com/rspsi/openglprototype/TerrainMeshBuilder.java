@@ -12,15 +12,7 @@ import com.jagex.map.tile.SimpleTile;
 
 import java.util.Arrays;
 
-/**
- * Converts the working editor's already-built SceneGraph terrain into a
- * GPU-ready mesh.
- *
- * This deliberately consumes RSPSi's SimpleTile/ShapedTile output instead of
- * trying to recreate overlay shapes independently. That means the OpenGL path
- * now inherits the editor's native overlay orientation, shaped-tile
- * triangulation, interpolated heights and per-corner HSL lighting.
- */
+/** Converts RSPSi's already-built SceneGraph terrain into a GPU-ready mesh. */
 public final class TerrainMeshBuilder {
     private static final int CHUNK_SIZE = 64;
     private static final float TILE_SIZE = 128.0f;
@@ -43,6 +35,7 @@ public final class TerrainMeshBuilder {
         int fallbackTiles = 0;
         int shapedTiles = 0;
         int simpleTiles = 0;
+        int texturedTriangles = 0;
 
         for (int localY = 0; localY < CHUNK_SIZE; localY++) {
             for (int localX = 0; localX < CHUNK_SIZE; localX++) {
@@ -56,16 +49,16 @@ public final class TerrainMeshBuilder {
                     tile = sceneGraph.tiles[plane][mapX][mapY];
                 }
 
-                ShapedTile shaped = tile == null ? null
-                        : tile.temporaryShapedTile.orElse(tile.shape);
-                SimpleTile simple = tile == null ? null
-                        : tile.temporarySimpleTile.orElse(tile.simple);
+                ShapedTile shaped = tile == null ? null : tile.temporaryShapedTile.orElse(tile.shape);
+                SimpleTile simple = tile == null ? null : tile.temporarySimpleTile.orElse(tile.simple);
 
                 if (shaped != null && shaped.getTriangleA() != null) {
-                    appendShapedTile(shaped, positions, colours, indices);
+                    texturedTriangles += appendShapedTile(shaped, positions, colours, indices);
                     shapedTiles++;
                 } else if (simple != null) {
-                    appendSimpleTile(chunk, plane, mapX, mapY, simple, positions, colours, indices);
+                    if (appendSimpleTile(chunk, plane, mapX, mapY, simple, positions, colours, indices)) {
+                        texturedTriangles += 2;
+                    }
                     simpleTiles++;
                 } else {
                     appendFallbackTile(chunk, plane, mapX, mapY, positions, colours, indices);
@@ -76,15 +69,15 @@ public final class TerrainMeshBuilder {
 
         System.out.println("[OPENGL-TERRAIN] chunk=" + (chunk.offsetX / 64) + "," + (chunk.offsetY / 64)
                 + " simple=" + simpleTiles + " shaped=" + shapedTiles + " fallback=" + fallbackTiles
-                + " triangles=" + (indices.size / 3));
+                + " texturedTriangles=" + texturedTriangles + " triangles=" + (indices.size / 3));
 
         return new TerrainMeshSnapshot(positions.toArray(), colours.toArray(), indices.toArray());
     }
 
-    private static void appendShapedTile(ShapedTile tile,
-                                         FloatCollector positions,
-                                         FloatCollector colours,
-                                         IntCollector indices) {
+    private static int appendShapedTile(ShapedTile tile,
+                                        FloatCollector positions,
+                                        FloatCollector colours,
+                                        IntCollector indices) {
         int[] xs = tile.getOrigVertexX();
         int[] ys = tile.getOrigVertexY();
         int[] zs = tile.getOrigVertexZ();
@@ -94,11 +87,14 @@ public final class TerrainMeshBuilder {
         int[] hslA = tile.getTriangleHslA();
         int[] hslB = tile.getTriangleHslB();
         int[] hslC = tile.getTriangleHslC();
+        int[] textures = tile.getTriangleTexture();
+        int[] displayColours = tile.getDisplayColor();
 
         if (xs == null || ys == null || zs == null || a == null || b == null || c == null) {
-            return;
+            return 0;
         }
 
+        int texturedTriangles = 0;
         for (int triangle = 0; triangle < a.length; triangle++) {
             int ia = a[triangle];
             int ib = b[triangle];
@@ -107,25 +103,37 @@ public final class TerrainMeshBuilder {
                 continue;
             }
 
-            int colourA = hslA != null && triangle < hslA.length ? hslA[triangle] : tile.getUnderlayColour();
-            int colourB = hslB != null && triangle < hslB.length ? hslB[triangle] : tile.getUnderlayColour();
-            int colourC = hslC != null && triangle < hslC.length ? hslC[triangle] : tile.getUnderlayColour();
+            boolean textured = textures != null && triangle < textures.length && textures[triangle] >= 0;
+            int triangleFallback = tile.getUnderlayColour();
+            if (textured) {
+                texturedTriangles++;
+                if (displayColours != null && triangle < displayColours.length) {
+                    triangleFallback = paletteRgb(displayColours[triangle], tile.getTextureColour());
+                } else {
+                    triangleFallback = paletteRgb(tile.getTextureColour(), tile.getUnderlayColour());
+                }
+            }
+
+            int colourA = hslA != null && triangle < hslA.length ? hslA[triangle] : triangleFallback;
+            int colourB = hslB != null && triangle < hslB.length ? hslB[triangle] : triangleFallback;
+            int colourC = hslC != null && triangle < hslC.length ? hslC[triangle] : triangleFallback;
 
             int base = positions.size / 3;
-            appendVertex(positions, colours, xs[ia], -ys[ia], zs[ia], paletteRgb(colourA, tile.getUnderlayColour()));
-            appendVertex(positions, colours, xs[ib], -ys[ib], zs[ib], paletteRgb(colourB, tile.getUnderlayColour()));
-            appendVertex(positions, colours, xs[ic], -ys[ic], zs[ic], paletteRgb(colourC, tile.getTextureColour()));
+            appendVertex(positions, colours, xs[ia], -ys[ia], zs[ia], paletteRgb(colourA, triangleFallback));
+            appendVertex(positions, colours, xs[ib], -ys[ib], zs[ib], paletteRgb(colourB, triangleFallback));
+            appendVertex(positions, colours, xs[ic], -ys[ic], zs[ic], paletteRgb(colourC, triangleFallback));
 
             indices.add(base);
             indices.add(base + 1);
             indices.add(base + 2);
         }
+        return texturedTriangles;
     }
 
-    private static void appendSimpleTile(Chunk chunk, int plane, int mapX, int mapY, SimpleTile tile,
-                                         FloatCollector positions,
-                                         FloatCollector colours,
-                                         IntCollector indices) {
+    private static boolean appendSimpleTile(Chunk chunk, int plane, int mapX, int mapY, SimpleTile tile,
+                                            FloatCollector positions,
+                                            FloatCollector colours,
+                                            IntCollector indices) {
         float x0 = mapX * TILE_SIZE;
         float x1 = (mapX + 1) * TILE_SIZE;
         float z0 = mapY * TILE_SIZE;
@@ -136,7 +144,10 @@ public final class TerrainMeshBuilder {
         float h01 = -chunk.mapRegion.tileHeights[plane][mapX][mapY + 1];
         float h11 = -chunk.mapRegion.tileHeights[plane][mapX + 1][mapY + 1];
 
-        int fallback = resolveTileRgb(chunk, plane, mapX, mapY);
+        int floorFallback = resolveTileRgb(chunk, plane, mapX, mapY);
+        boolean textured = tile.getTexture() >= 0;
+        int fallback = textured ? paletteRgb(tile.getColour(), floorFallback) : floorFallback;
+
         int centre = paletteRgb(tile.getCentreColour(), fallback);
         int east = paletteRgb(tile.getEastColour(), fallback);
         int north = paletteRgb(tile.getNorthColour(), fallback);
@@ -152,6 +163,7 @@ public final class TerrainMeshBuilder {
         for (int i = 0; i < 6; i++) {
             indices.add(base + i);
         }
+        return textured;
     }
 
     private static void appendFallbackTile(Chunk chunk, int plane, int mapX, int mapY,
@@ -201,7 +213,13 @@ public final class TerrainMeshBuilder {
         GameRasterizer rasterizer = GameRasterizer.getInstance();
         if (rasterizer != null && rasterizer.colourPalette != null
                 && hsl >= 0 && hsl < rasterizer.colourPalette.length) {
-            return sanitiseRgb(rasterizer.colourPalette[hsl]);
+            int rgb = rasterizer.colourPalette[hsl];
+            // A valid palette entry of zero is visually indistinguishable from a
+            // missing face against the editor background, so use the known tile
+            // colour while texture sampling is not wired into OpenGL yet.
+            if ((rgb & 0xffffff) != 0) {
+                return sanitiseRgb(rgb);
+            }
         }
         return sanitiseRgb(fallbackRgb);
     }
@@ -231,7 +249,7 @@ public final class TerrainMeshBuilder {
     }
 
     private static int sanitiseRgb(int rgb) {
-        if (rgb < 0 || rgb == 0xff00ff || rgb == HIDDEN_COLOUR) {
+        if (rgb < 0 || rgb == 0xff00ff || rgb == HIDDEN_COLOUR || (rgb & 0xffffff) == 0) {
             return 0x6f8f43;
         }
         return rgb & 0xffffff;
