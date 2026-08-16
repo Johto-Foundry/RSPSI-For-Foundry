@@ -3533,7 +3533,7 @@ public class SceneGraph {
 		if ((screenXD - screenXC) * (screenYB - screenYC) - (screenYD - screenYC) * (screenXB - screenXC) > 0) {
 			GameRasterizer.getInstance().restrictEdges = screenXD < 0 || screenXC < 0 || screenXB < 0 || screenXD > GameRasterizer.getInstance().getMaxRight() || screenXC > GameRasterizer.getInstance().getMaxRight()
 					|| screenXB > GameRasterizer.getInstance().getMaxRight();
-			if (mouseInTriangle(clickX, clickY, screenYD, screenYC, screenYB, screenXD, screenXC, screenXB)) {
+			if (!Client.getSingleton().mouseWheelDown && mouseInTriangle(clickX, clickY, screenYD, screenYC, screenYB, screenXD, screenXC, screenXB)) {
 				handleMouseInTile(tileX, tileY, plane);
 			}
 
@@ -3602,7 +3602,7 @@ public class SceneGraph {
 		if ((screenXA - screenXB) * (screenYC - screenYB) - (screenYA - screenYB) * (screenXC - screenXB) > 0) {
 			GameRasterizer.getInstance().restrictEdges = screenXA < 0 || screenXB < 0 || screenXC < 0 || screenXA > GameRasterizer.getInstance().getMaxRight() || screenXB > GameRasterizer.getInstance().getMaxRight()
 					|| screenXC > GameRasterizer.getInstance().getMaxRight();
-			if (mouseInTriangle(clickX, clickY, screenYA, screenYB, screenYC, screenXA, screenXB, screenXC)) {
+			if (!Client.getSingleton().mouseWheelDown && mouseInTriangle(clickX, clickY, screenYA, screenYB, screenYC, screenXA, screenXB, screenXC)) {
 				this.handleMouseInTile(tileX, tileY, plane);
 			}
 			if (hiddenTile) {
@@ -3711,7 +3711,7 @@ public class SceneGraph {
 			if ((sXA - sXB) * (sYC - sYB) - (sYA - sYB) * (sXC - sXB) > 0) {
 				GameRasterizer.getInstance().restrictEdges = sXA < 0 || sXB < 0 || sXC < 0 || sXA > GameRasterizer.getInstance().getMaxRight() || sXB > GameRasterizer.getInstance().getMaxRight()
 						|| sXC > GameRasterizer.getInstance().getMaxRight();
-				if (mouseInTriangle(clickX, clickY, sYA, sYB, sYC, sXA, sXB, sXC)) {
+				if (!Client.getSingleton().mouseWheelDown && mouseInTriangle(clickX, clickY, sYA, sYB, sYC, sXA, sXB, sXC)) {
 					handleMouseInTile(tileX, tileY, plane);
 				}
 
