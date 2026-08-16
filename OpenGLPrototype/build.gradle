@@ -1,0 +1,12 @@
+plugins {
+    id 'application'
+}
+
+dependencies {
+    implementation project(':Client')
+    implementation 'com.metsci.ext.org.jogamp.gluegen:gluegen-rt-main:2.4.0-rc-20200202'
+    implementation 'com.metsci.ext.org.jogamp.jogl:jogl-all-main:2.4.0-rc-20200202'
+    implementation 'org.joml:joml:1.9.24'
+}
+
+mainClassName = 'com.rspsi.openglprototype.FoundryGLPrototype'
