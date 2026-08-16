@@ -71,6 +71,7 @@ public final class ObjectMeshBuilder {
         System.out.println("[OPENGL-OBJECTS] objects="+stats.objects+" meshes="+stats.meshes+" faces="+stats.faces
                 +" texturedFaces="+stats.texturedFaces+" mappedFaces="+stats.mappedFaces
                 +" legacyMappedFaces="+stats.legacyMappedFaces
+                +" faceVertexMappedFaces="+stats.faceVertexMappedFaces
                 +" flatFaces="+stats.flatFaces+" flatTexturedFaces="+stats.flatTexturedFaces
                 +" missingTextureFaces="+stats.missingTextureFaces+" alphaSkipped="+stats.alphaSkipped+" triangles="+(indices.size/3));
         if(!stats.unmappedByObject.isEmpty()) System.out.println("[OPENGL-OBJECTS] Unmapped textured faces by object (first seen IDs): "+stats.unmappedByObject);
@@ -132,11 +133,14 @@ public final class ObjectMeshBuilder {
 
             MappingResult mapping = textured ? mappedUvs(m,face,a,b,c,vc) : null;
             float[][] faceUv = mapping == null ? null : mapping.uvs;
-            if(faceUv!=null){stats.mappedFaces++;if(mapping.legacyFaceTypeIndex)stats.legacyMappedFaces++;}
+            if(faceUv!=null){
+                stats.mappedFaces++;
+                if(mapping.legacyFaceTypeIndex)stats.legacyMappedFaces++;
+                if(mapping.faceVertexFallback)stats.faceVertexMappedFaces++;
+            }
             if(textured&&faceUv==null){
                 if(stats.unmappedByObject.size()<16||stats.unmappedByObject.containsKey(objectId))stats.unmappedByObject.merge(objectId,1,Integer::sum);
-                // Last-resort canonical mapping. Most old 317-converted models should
-                // now resolve through the faceTypes>>2 mapping index above.
+                // Should be unreachable after face-vertex fallback; keep as last-resort safety net.
                 faceUv=new float[][]{{0,0},{1,0},{0,1}};
             }
             if(faceUv==null)faceUv=new float[][]{{0,0},{0,0},{0,0}};
@@ -155,33 +159,47 @@ public final class ObjectMeshBuilder {
     }
 
     /**
-     * Resolve the texture-mapping triangle exactly the two ways this legacy client
-     * can encode it:
+     * Resolve the texture-mapping triangle exactly the ways this legacy client encodes it:
      *
      * 1) OSRS meshes: texture_coordinates[face] selects textureMappingP/M/N.
      * 2) Models converted through Mesh.convertTexturesTo317(): the converter packs
      *    the mapping index into the upper bits of faceTypes (2 + index*4). The
-     *    software 317 rasterizer consumes faceTypes >> 2. Ignoring those upper bits
-     *    was why classic tree models (e.g. object 1276/1278) fell into the generic
-     *    UV fallback and produced long black/opaque texture streaks.
+     *    software 317 rasterizer consumes faceTypes >> 2.
+     * 3) Software Mesh.renderFace fallback: when neither path yields a usable mapping
+     *    index (or the resolved vertices are invalid / >= 4096), the face's own
+     *    vertices are used as the mapping triangle. Classic foliage (e.g. 1276/1278)
+     *    relies on this path; the previous hard-coded {0,0}/{1,0}/{0,1} UV fallback
+     *    produced long black/opaque texture streaks.
      */
     private static MappingResult mappedUvs(Mesh m,int face,int a,int b,int c,int vertexCount){
-        if(m.textureMappingP==null||m.textureMappingM==null||m.textureMappingN==null)return null;
-
         int t=-1;
         boolean legacy=false;
-        byte[] coordinates = textureCoordinates(m);
-        if(coordinates!=null&&face<coordinates.length&&(coordinates[face]&0xff)!=0xff){
-            t=coordinates[face]&0xff;
-        } else if(m.faceTypes!=null&&face<m.faceTypes.length&&(m.faceTypes[face]&2)==2){
-            t=(m.faceTypes[face]&0xff)>>2;
-            legacy=true;
+
+        if(m.textureMappingP!=null&&m.textureMappingM!=null&&m.textureMappingN!=null){
+            byte[] coordinates = textureCoordinates(m);
+            if(coordinates!=null&&face<coordinates.length&&(coordinates[face]&0xff)!=0xff){
+                t=coordinates[face]&0xff;
+            } else if(m.faceTypes!=null&&face<m.faceTypes.length&&(m.faceTypes[face]&2)==2){
+                t=(m.faceTypes[face]&0xff)>>2;
+                legacy=true;
+            }
+
+            if(t>=0&&t<m.textureMappingP.length&&t<m.textureMappingM.length&&t<m.textureMappingN.length){
+                int p=m.textureMappingP[t],q=m.textureMappingM[t],r=m.textureMappingN[t];
+                // Match Mesh.renderFace: out-of-range mapping verts fall back to the face itself.
+                if(valid(p,vertexCount)&&valid(q,vertexCount)&&valid(r,vertexCount)
+                        &&p<4096&&q<4096&&r<4096){
+                    return new MappingResult(
+                            new float[][]{basisUv(m,p,q,r,a),basisUv(m,p,q,r,b),basisUv(m,p,q,r,c)},
+                            legacy,false);
+                }
+            }
         }
 
-        if(t<0||t>=m.textureMappingP.length||t>=m.textureMappingM.length||t>=m.textureMappingN.length)return null;
-        int p=m.textureMappingP[t],q=m.textureMappingM[t],r=m.textureMappingN[t];
-        if(!valid(p,vertexCount)||!valid(q,vertexCount)||!valid(r,vertexCount))return null;
-        return new MappingResult(new float[][]{basisUv(m,p,q,r,a),basisUv(m,p,q,r,b),basisUv(m,p,q,r,c)},legacy);
+        // Software fallback: face vertices are the mapping triangle.
+        return new MappingResult(
+                new float[][]{basisUv(m,a,b,c,a),basisUv(m,a,b,c,b),basisUv(m,a,b,c,c)},
+                false,true);
     }
 
     private static float[] basisUv(Mesh m,int p,int q,int r,int v){
@@ -234,8 +252,17 @@ public final class ObjectMeshBuilder {
 
     private static boolean valid(int i,int n){return i>=0&&i<n;}
     private static TerrainMeshSnapshot empty(){return new TerrainMeshSnapshot(new float[0],new float[0],new float[0],new float[0],new int[0]);}
-    private static final class MappingResult{final float[][]uvs;final boolean legacyFaceTypeIndex;MappingResult(float[][]u,boolean l){uvs=u;legacyFaceTypeIndex=l;}}
-    private static final class Stats{int objects,meshes,faces,texturedFaces,mappedFaces,legacyMappedFaces,flatFaces,flatTexturedFaces,missingTextureFaces,alphaSkipped;final Map<Integer,Integer>unmappedByObject=new LinkedHashMap<>();final Map<Integer,Integer>missingTextures=new LinkedHashMap<>();}
+    private static final class MappingResult{
+        final float[][]uvs;
+        final boolean legacyFaceTypeIndex;
+        final boolean faceVertexFallback;
+        MappingResult(float[][]u,boolean legacy,boolean faceVertex){uvs=u;legacyFaceTypeIndex=legacy;faceVertexFallback=faceVertex;}
+    }
+    private static final class Stats{
+        int objects,meshes,faces,texturedFaces,mappedFaces,legacyMappedFaces,faceVertexMappedFaces,flatFaces,flatTexturedFaces,missingTextureFaces,alphaSkipped;
+        final Map<Integer,Integer>unmappedByObject=new LinkedHashMap<>();
+        final Map<Integer,Integer>missingTextures=new LinkedHashMap<>();
+    }
     private static final class FloatCollector{private float[]data;private int size;FloatCollector(int cap){data=new float[Math.max(32,cap)];}void add(float v){if(size==data.length)data=Arrays.copyOf(data,data.length*2);data[size++]=v;}float[]toArray(){return Arrays.copyOf(data,size);}}
     private static final class IntCollector{private int[]data;private int size;IntCollector(int cap){data=new int[Math.max(32,cap)];}void add(int v){if(size==data.length)data=Arrays.copyOf(data,data.length*2);data[size++]=v;}int[]toArray(){return Arrays.copyOf(data,size);}}
 }
