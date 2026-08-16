@@ -1,13 +1,16 @@
-# IntelliJ
-.idea/
-*.iml
-out/
-
-# Gradle
 .gradle/
+.idea/
+bin/
 build/
-**/build/
+out/
+/gradlew.bat
+/gradlew
 
-# OS/runtime
-.DS_Store
-Thumbs.db
+.settings/
+
+.classpath
+
+.project
+
+hs_err_*
+/Editor/plugins/
