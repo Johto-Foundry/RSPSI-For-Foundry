@@ -24,6 +24,7 @@ run {
 dependencies  {
 
  	compile project(':Client')
+ 	compile project(':OpenGLPrototype')
 	// https://mvnrepository.com/artifact/org.controlsfx/controlsfx
 	compile group: 'org.controlsfx', name: 'controlsfx', version: '8.40.15'
 	compile 'com.jfoenix:jfoenix:8.0.9'
