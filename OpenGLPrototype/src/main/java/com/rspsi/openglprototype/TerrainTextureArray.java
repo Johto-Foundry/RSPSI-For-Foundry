@@ -31,7 +31,7 @@ public final class TerrainTextureArray {
         handle = id[0];
         gl.glActiveTexture(GL.GL_TEXTURE0);
         gl.glBindTexture(GL3.GL_TEXTURE_2D_ARRAY, handle);
-        gl.glTexParameteri(GL3.GL_TEXTURE_2D_ARRAY, GL.GL_TEXTURE_MIN_FILTER, GL.GL_LINEAR);
+        gl.glTexParameteri(GL3.GL_TEXTURE_2D_ARRAY, GL.GL_TEXTURE_MIN_FILTER, GL.GL_LINEAR_MIPMAP_LINEAR);
         gl.glTexParameteri(GL3.GL_TEXTURE_2D_ARRAY, GL.GL_TEXTURE_MAG_FILTER, GL.GL_LINEAR);
         gl.glTexParameteri(GL3.GL_TEXTURE_2D_ARRAY, GL.GL_TEXTURE_WRAP_S, GL.GL_REPEAT);
         gl.glTexParameteri(GL3.GL_TEXTURE_2D_ARRAY, GL.GL_TEXTURE_WRAP_T, GL.GL_REPEAT);
@@ -46,21 +46,77 @@ public final class TerrainTextureArray {
             gl.glTexSubImage3D(GL3.GL_TEXTURE_2D_ARRAY, 0, 0, 0, textureId, LAYER_SIZE, LAYER_SIZE, 1, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, rgba);
             uploaded++;
         }
+
+        // Mipmaps greatly reduce the harsh shimmering/brick-face aliasing that
+        // appeared when a 128x128 cache texture was minified on distant models.
+        gl.glGenerateMipmap(GL3.GL_TEXTURE_2D_ARRAY);
         gl.glBindTexture(GL3.GL_TEXTURE_2D_ARRAY, 0);
-        System.out.println("[OPENGL-TEXTURES] GPU texture array ready: " + uploaded + "/" + layerCount + " rasterizer textures (" + LAYER_SIZE + "x" + LAYER_SIZE + ").");
+        System.out.println("[OPENGL-TEXTURES] GPU texture array ready: " + uploaded + "/" + layerCount
+                + " rasterizer textures (" + LAYER_SIZE + "x" + LAYER_SIZE + ", alpha-edge bleed + mipmaps).");
     }
 
     private ByteBuffer rasterizerPixelsToRgba(int[] pixels) {
+        int[] rgb = new int[TEXELS_PER_LAYER];
+        boolean[] opaque = new boolean[TEXELS_PER_LAYER];
+
+        for (int i = 0; i < TEXELS_PER_LAYER; i++) {
+            int value = pixels[i] & 0xffffff;
+            rgb[i] = value;
+            opaque[i] = value != 0 && value != 0xff00ff;
+        }
+
+        /*
+         * Linear filtering blends RGB even across fully transparent texels. If
+         * those texels contain black (as RS cache cut-outs normally do), their
+         * black RGB leaks into the visible edge and creates the dark halo seen
+         * around foliage/cobwebs. Keep alpha zero, but bleed neighbouring opaque
+         * RGB into transparent texels so filtered cut-out edges retain the leaf/
+         * web colour instead of interpolating toward black.
+         */
+        int[] bled = rgb.clone();
+        boolean[] known = opaque.clone();
+        for (int pass = 0; pass < 4; pass++) {
+            int[] next = bled.clone();
+            boolean[] nextKnown = known.clone();
+            boolean changed = false;
+            for (int y = 0; y < LAYER_SIZE; y++) {
+                for (int x = 0; x < LAYER_SIZE; x++) {
+                    int i = y * LAYER_SIZE + x;
+                    if (known[i]) continue;
+                    long rr = 0, gg = 0, bb = 0;
+                    int count = 0;
+                    if (x > 0) count = addNeighbour(i - 1, known, bled, countHolder, rgbHolder); // placeholder
+                }
+            }
+            // Manual neighbour pass below; kept separate for clarity and no allocations per texel.
+            for (int y = 0; y < LAYER_SIZE; y++) {
+                for (int x = 0; x < LAYER_SIZE; x++) {
+                    int i = y * LAYER_SIZE + x;
+                    if (known[i]) continue;
+                    int count = 0, r = 0, g = 0, b = 0;
+                    if (x > 0 && known[i - 1]) { int v=bled[i-1]; r+=(v>>16)&255; g+=(v>>8)&255; b+=v&255; count++; }
+                    if (x+1 < LAYER_SIZE && known[i + 1]) { int v=bled[i+1]; r+=(v>>16)&255; g+=(v>>8)&255; b+=v&255; count++; }
+                    if (y > 0 && known[i - LAYER_SIZE]) { int v=bled[i-LAYER_SIZE]; r+=(v>>16)&255; g+=(v>>8)&255; b+=v&255; count++; }
+                    if (y+1 < LAYER_SIZE && known[i + LAYER_SIZE]) { int v=bled[i+LAYER_SIZE]; r+=(v>>16)&255; g+=(v>>8)&255; b+=v&255; count++; }
+                    if (count > 0) {
+                        next[i] = ((r/count)<<16)|((g/count)<<8)|(b/count);
+                        nextKnown[i] = true;
+                        changed = true;
+                    }
+                }
+            }
+            bled = next;
+            known = nextKnown;
+            if (!changed) break;
+        }
+
         ByteBuffer out = ByteBuffer.allocateDirect(TEXELS_PER_LAYER * 4);
         for (int i = 0; i < TEXELS_PER_LAYER; i++) {
-            int rgb = pixels[i] & 0xffffff;
-            // RS model textures commonly encode cut-out/transparent areas as 0.
-            // The software rasterizer treats those texels as holes; preserving
-            // them as opaque produced the large black wedges seen in foliage.
-            int a = (rgb == 0 || rgb == 0xff00ff) ? 0 : 0xff;
-            out.put((byte)((rgb >> 16) & 0xff));
-            out.put((byte)((rgb >> 8) & 0xff));
-            out.put((byte)(rgb & 0xff));
+            int value = bled[i];
+            int a = opaque[i] ? 0xff : 0;
+            out.put((byte)((value >> 16) & 0xff));
+            out.put((byte)((value >> 8) & 0xff));
+            out.put((byte)(value & 0xff));
             out.put((byte)a);
         }
         out.flip();
