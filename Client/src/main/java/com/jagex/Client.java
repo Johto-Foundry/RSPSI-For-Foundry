@@ -239,6 +239,18 @@ public final class Client implements Runnable {
 	private int resizeHeight = -1, resizeWidth = -1;
 
 	public List<Chunk> chunks = new ArrayList<>();
+	private final Map<Long, Chunk> chunkIndex = new HashMap<>();
+
+	private static long chunkKey(int tileX, int tileY) {
+		return ((long) (tileX >> 6) << 32) ^ ((tileY >> 6) & 0xffffffffL);
+	}
+
+	private void rebuildChunkIndex() {
+		chunkIndex.clear();
+		for (Chunk chunk : chunks) {
+			chunkIndex.put(chunkKey(chunk.offsetX, chunk.offsetY), chunk);
+		}
+	}
 
 	public Client() {
 		singleton = this;
@@ -415,8 +427,13 @@ public final class Client implements Runnable {
 	private static long lastMinimapUpdate;
 
 	public Chunk getCurrentChunk() {
+		int tileX = xCameraPos / 128;
+		int tileY = yCameraPos / 128;
+		Chunk indexed = chunkIndex.get(chunkKey(tileX, tileY));
+		if (indexed != null && indexed.inChunk(tileX, tileY))
+			return indexed;
 		for (int i = chunks.size() - 1; i >= 0; i--) {
-			if (chunks.get(i).inChunk(xCameraPos / 128, yCameraPos / 128))
+			if (chunks.get(i).inChunk(tileX, tileY))
 				return chunks.get(i);
 		}
 		return chunks.isEmpty() ? null : chunks.get(0);
@@ -599,6 +616,7 @@ public final class Client implements Runnable {
 
 		fullMapCanvas = new DisplayCanvas(chunkXLength * Options.mapRegionSize.get(), chunkYLength * Options.mapRegionSize.get(), false);
 		chunks.clear();
+		chunkIndex.clear();
 		
 		gameImageBuffer.initializeRasterizer();
 		gameImageBuffer.clear(0);
@@ -671,6 +689,7 @@ public final class Client implements Runnable {
 		baseY = 0;
 		fullMapCanvas = new DisplayCanvas(chunkXLength * Options.mapRegionSize.get(), chunkYLength * Options.mapRegionSize.get(), false);
 		chunks.clear();
+		chunkIndex.clear();
 		
 		gameImageBuffer.initializeRasterizer();
 		gameImageBuffer.clear(0);
@@ -727,6 +746,7 @@ public final class Client implements Runnable {
 
 	public final void loadChunks(List<Chunk> chunks) {
 		this.chunks.clear();
+		this.chunkIndex.clear();
 
 		baseX = 0;
 		baseY = 0;
@@ -779,6 +799,7 @@ public final class Client implements Runnable {
 
 	public final void loadFiles(byte[] landscapeBytes, byte[] objectBytes, int regionX, int regionY) {
 		chunks.clear();
+		chunkIndex.clear();
 
 		baseX = 0;
 		baseY = 0;
@@ -848,6 +869,7 @@ public final class Client implements Runnable {
 		} catch(Exception ex) {
 			ex.printStackTrace();
 			this.chunks.clear();
+		this.chunkIndex.clear();
 		
 			loadState = LoadState.ERROR;
 		
@@ -1317,6 +1339,7 @@ public final class Client implements Runnable {
 			} catch (Exception exception) {
 				exception.printStackTrace();
 				chunks.clear();
+		chunkIndex.clear();
 			}
 		}
 		mapRegion.method171(sceneGraph);
@@ -1500,6 +1523,7 @@ public final class Client implements Runnable {
 		if(!pendingChunks.isEmpty()) {
 			chunks.addAll(pendingChunks);
 			pendingChunks.clear();
+			rebuildChunkIndex();
 		}
 		loadNextRegion();
 		for (Chunk chunk : chunks) {
@@ -1558,28 +1582,28 @@ public final class Client implements Runnable {
 	public final int tileHeight(int x, int y, int z) {
 		int worldX = x >> 7;
 		int worldY = y >> 7;
-		for (Chunk chunk : chunks) {
-			if (worldX >= chunk.offsetX && worldX <= chunk.offsetX + 64 && worldY >= chunk.offsetY
-					&& worldY <= chunk.offsetY + 64) {
-				worldX %= 64;
-				worldY %= 64;
-				int plane = z;
-				/*if (plane < 3 && (chunk.tileFlags[1][worldX][worldY] & MapRegion.BRIDGE_TILE) != 0) {
-					plane++;
-				}*/
-
-				int sizeX = x & 0x7f;
-				int sizeY = y & 0x7f;
-				int i2 = chunk.mapRegion.tileHeights[plane][worldX][worldY] * (128 - sizeX)
-						+ chunk.mapRegion.tileHeights[plane][worldX + 1][worldY] * sizeX >> 7;
-				int j2 = chunk.mapRegion.tileHeights[plane][worldX][worldY + 1] * (128 - sizeX)
-						+ chunk.mapRegion.tileHeights[plane][worldX + 1][worldY + 1] * sizeX >> 7;
-
-				return i2 * (128 - sizeY) + j2 * sizeY >> 7;
+		Chunk chunk = chunkIndex.get(chunkKey(worldX, worldY));
+		if (chunk == null || !chunk.inChunk(worldX, worldY)) {
+			for (Chunk candidate : chunks) {
+				if (candidate.inChunk(worldX, worldY)) {
+					chunk = candidate;
+					break;
+				}
 			}
 		}
+		if (chunk == null)
+			return 0;
 
-		return 0;
+		worldX -= chunk.offsetX;
+		worldY -= chunk.offsetY;
+		int plane = z;
+		int sizeX = x & 0x7f;
+		int sizeY = y & 0x7f;
+		int i2 = chunk.mapRegion.tileHeights[plane][worldX][worldY] * (128 - sizeX)
+				+ chunk.mapRegion.tileHeights[plane][worldX + 1][worldY] * sizeX >> 7;
+		int j2 = chunk.mapRegion.tileHeights[plane][worldX][worldY + 1] * (128 - sizeX)
+				+ chunk.mapRegion.tileHeights[plane][worldX + 1][worldY + 1] * sizeX >> 7;
+		return i2 * (128 - sizeY) + j2 * sizeY >> 7;
 	}
 
 	public static void updateChunkTiles() {
