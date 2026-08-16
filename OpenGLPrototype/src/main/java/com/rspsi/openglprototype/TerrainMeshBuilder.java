@@ -3,92 +3,217 @@ package com.rspsi.openglprototype;
 import com.jagex.cache.def.Floor;
 import com.jagex.cache.loader.floor.FloorDefinitionLoader;
 import com.jagex.chunk.Chunk;
+import com.jagex.draw.raster.GameRasterizer;
+import com.jagex.map.tile.SceneTile;
+import com.jagex.map.tile.ShapedTile;
+import com.jagex.map.tile.SimpleTile;
+
+import java.util.Arrays;
 
 /**
- * Converts the working editor's existing terrain into a GPU-ready mesh.
+ * Converts the working editor's already-built SceneGraph terrain into a
+ * GPU-ready mesh.
  *
- * This pass preserves the live height map and applies the cache floor RGB for
- * each tile. Overlay shapes and textures are intentionally deferred to the
- * next renderer milestones; when an overlay exists its base RGB currently
- * colours the whole tile.
+ * This deliberately consumes RSPSi's SimpleTile/ShapedTile output instead of
+ * trying to recreate overlay shapes independently. That means the OpenGL path
+ * now inherits the editor's native overlay orientation, shaped-tile
+ * triangulation, interpolated heights and per-corner HSL lighting.
  */
 public final class TerrainMeshBuilder {
     private static final int CHUNK_SIZE = 64;
     private static final float TILE_SIZE = 128.0f;
+    private static final int HIDDEN_COLOUR = 0xbc614e;
 
     private TerrainMeshBuilder() {
     }
 
     public static TerrainMeshSnapshot build(Chunk chunk, int plane) {
-        if (chunk == null || chunk.mapRegion == null) {
+        if (chunk == null || chunk.mapRegion == null || chunk.sceneGraph == null) {
             return new TerrainMeshSnapshot(new float[0], new float[0], new int[0]);
         }
 
-        // Four vertices per tile deliberately avoids colour bleeding between
-        // neighbouring floor definitions and prepares us for shaped overlays.
-        final int tileCount = CHUNK_SIZE * CHUNK_SIZE;
-        float[] positions = new float[tileCount * 4 * 3];
-        float[] colours = new float[tileCount * 4 * 3];
-        int[] indices = new int[tileCount * 6];
+        // Worst case: shaped tiles currently contain at most six triangles.
+        // We intentionally duplicate vertices per triangle so each triangle can
+        // retain the exact colour triplet produced by RSPSi's tile builder.
+        FloatCollector positions = new FloatCollector(CHUNK_SIZE * CHUNK_SIZE * 18 * 3);
+        FloatCollector colours = new FloatCollector(CHUNK_SIZE * CHUNK_SIZE * 18 * 3);
+        IntCollector indices = new IntCollector(CHUNK_SIZE * CHUNK_SIZE * 18);
 
-        int vertexFloat = 0;
-        int index = 0;
-        int baseVertex = 0;
+        int fallbackTiles = 0;
+        int shapedTiles = 0;
+        int simpleTiles = 0;
 
-        for (int y = 0; y < CHUNK_SIZE; y++) {
-            for (int x = 0; x < CHUNK_SIZE; x++) {
-                int mapX = chunk.offsetX + x;
-                int mapY = chunk.offsetY + y;
+        for (int localY = 0; localY < CHUNK_SIZE; localY++) {
+            for (int localX = 0; localX < CHUNK_SIZE; localX++) {
+                int mapX = chunk.offsetX + localX;
+                int mapY = chunk.offsetY + localY;
 
-                float x0 = mapX * TILE_SIZE;
-                float x1 = (mapX + 1) * TILE_SIZE;
-                float z0 = mapY * TILE_SIZE;
-                float z1 = (mapY + 1) * TILE_SIZE;
-
-                float h00 = -chunk.mapRegion.tileHeights[plane][mapX][mapY];
-                float h10 = -chunk.mapRegion.tileHeights[plane][mapX + 1][mapY];
-                float h01 = -chunk.mapRegion.tileHeights[plane][mapX][mapY + 1];
-                float h11 = -chunk.mapRegion.tileHeights[plane][mapX + 1][mapY + 1];
-
-                vertexFloat = putVertex(positions, vertexFloat, x0, h00, z0);
-                vertexFloat = putVertex(positions, vertexFloat, x1, h10, z0);
-                vertexFloat = putVertex(positions, vertexFloat, x0, h01, z1);
-                vertexFloat = putVertex(positions, vertexFloat, x1, h11, z1);
-
-                int rgb = resolveTileRgb(chunk, plane, mapX, mapY);
-                float r = ((rgb >> 16) & 0xff) / 255.0f;
-                float g = ((rgb >> 8) & 0xff) / 255.0f;
-                float b = (rgb & 0xff) / 255.0f;
-
-                // A tiny height-derived modulation gives the untextured preview
-                // some depth without attempting to reproduce RS lighting yet.
-                float averageHeight = (h00 + h10 + h01 + h11) * 0.25f;
-                float shade = clamp(0.93f + averageHeight / 20000.0f, 0.78f, 1.08f);
-                for (int vertex = 0; vertex < 4; vertex++) {
-                    int colour = (baseVertex + vertex) * 3;
-                    colours[colour] = clamp(r * shade, 0.0f, 1.0f);
-                    colours[colour + 1] = clamp(g * shade, 0.0f, 1.0f);
-                    colours[colour + 2] = clamp(b * shade, 0.0f, 1.0f);
+                SceneTile tile = null;
+                if (plane >= 0 && plane < chunk.sceneGraph.tiles.length
+                        && mapX >= 0 && mapX < chunk.sceneGraph.width
+                        && mapY >= 0 && mapY < chunk.sceneGraph.length) {
+                    tile = chunk.sceneGraph.tiles[plane][mapX][mapY];
                 }
 
-                indices[index++] = baseVertex;
-                indices[index++] = baseVertex + 2;
-                indices[index++] = baseVertex + 1;
-                indices[index++] = baseVertex + 1;
-                indices[index++] = baseVertex + 2;
-                indices[index++] = baseVertex + 3;
-                baseVertex += 4;
+                // Respect temporary editor tile state where possible, because
+                // this preview is intended to become the live editor viewport.
+                ShapedTile shaped = tile == null ? null
+                        : tile.temporaryShapedTile.orElse(tile.shape);
+                SimpleTile simple = tile == null ? null
+                        : tile.temporarySimpleTile.orElse(tile.simple);
+
+                if (shaped != null && shaped.getTriangleA() != null) {
+                    appendShapedTile(shaped, positions, colours, indices);
+                    shapedTiles++;
+                } else if (simple != null) {
+                    appendSimpleTile(chunk, plane, mapX, mapY, simple, positions, colours, indices);
+                    simpleTiles++;
+                } else {
+                    // During map loading there can briefly be no SceneTile yet.
+                    // Keep a conservative fallback so the preview remains usable.
+                    appendFallbackTile(chunk, plane, mapX, mapY, positions, colours, indices);
+                    fallbackTiles++;
+                }
             }
         }
 
-        return new TerrainMeshSnapshot(positions, colours, indices);
+        System.out.println("[OPENGL-TERRAIN] chunk=" + (chunk.offsetX / 64) + "," + (chunk.offsetY / 64)
+                + " simple=" + simpleTiles + " shaped=" + shapedTiles + " fallback=" + fallbackTiles
+                + " triangles=" + (indices.size / 3));
+
+        return new TerrainMeshSnapshot(positions.toArray(), colours.toArray(), indices.toArray());
     }
 
-    private static int putVertex(float[] positions, int p, float x, float y, float z) {
-        positions[p++] = x;
-        positions[p++] = y;
-        positions[p++] = z;
-        return p;
+    private static void appendShapedTile(ShapedTile tile,
+                                         FloatCollector positions,
+                                         FloatCollector colours,
+                                         IntCollector indices) {
+        int[] xs = tile.getOrigVertexX();
+        int[] ys = tile.getOrigVertexY();
+        int[] zs = tile.getOrigVertexZ();
+        int[] a = tile.getTriangleA();
+        int[] b = tile.getTriangleB();
+        int[] c = tile.getTriangleC();
+        int[] hslA = tile.getTriangleHslA();
+        int[] hslB = tile.getTriangleHslB();
+        int[] hslC = tile.getTriangleHslC();
+
+        if (xs == null || ys == null || zs == null || a == null || b == null || c == null) {
+            return;
+        }
+
+        for (int triangle = 0; triangle < a.length; triangle++) {
+            int ia = a[triangle];
+            int ib = b[triangle];
+            int ic = c[triangle];
+            if (!validVertex(ia, xs.length) || !validVertex(ib, xs.length) || !validVertex(ic, xs.length)) {
+                continue;
+            }
+
+            int colourA = hslA != null && triangle < hslA.length ? hslA[triangle] : tile.getUnderlayColour();
+            int colourB = hslB != null && triangle < hslB.length ? hslB[triangle] : tile.getUnderlayColour();
+            int colourC = hslC != null && triangle < hslC.length ? hslC[triangle] : tile.getUnderlayColour();
+
+            int base = positions.size / 3;
+            appendVertex(positions, colours, xs[ia], -ys[ia], zs[ia], paletteRgb(colourA, tile.getUnderlayColour()));
+            appendVertex(positions, colours, xs[ib], -ys[ib], zs[ib], paletteRgb(colourB, tile.getUnderlayColour()));
+            appendVertex(positions, colours, xs[ic], -ys[ic], zs[ic], paletteRgb(colourC, tile.getTextureColour()));
+
+            // Winding matches the working height-only renderer/OpenGL camera.
+            indices.add(base);
+            indices.add(base + 1);
+            indices.add(base + 2);
+        }
+    }
+
+    private static void appendSimpleTile(Chunk chunk, int plane, int mapX, int mapY, SimpleTile tile,
+                                         FloatCollector positions,
+                                         FloatCollector colours,
+                                         IntCollector indices) {
+        float x0 = mapX * TILE_SIZE;
+        float x1 = (mapX + 1) * TILE_SIZE;
+        float z0 = mapY * TILE_SIZE;
+        float z1 = (mapY + 1) * TILE_SIZE;
+
+        float h00 = -chunk.mapRegion.tileHeights[plane][mapX][mapY];
+        float h10 = -chunk.mapRegion.tileHeights[plane][mapX + 1][mapY];
+        float h01 = -chunk.mapRegion.tileHeights[plane][mapX][mapY + 1];
+        float h11 = -chunk.mapRegion.tileHeights[plane][mapX + 1][mapY + 1];
+
+        int centre = paletteRgb(tile.getCentreColour(), resolveTileRgb(chunk, plane, mapX, mapY));
+        int east = paletteRgb(tile.getEastColour(), centre);
+        int north = paletteRgb(tile.getNorthColour(), centre);
+        int northEast = paletteRgb(tile.getNorthEastColour(), centre);
+
+        // Same two-triangle split used by the classic SimpleTile path, with
+        // separate vertices so per-corner colours can interpolate on the GPU.
+        int base = positions.size / 3;
+        appendVertex(positions, colours, x0, h00, z0, centre);
+        appendVertex(positions, colours, x0, h01, z1, north);
+        appendVertex(positions, colours, x1, h10, z0, east);
+        appendVertex(positions, colours, x1, h10, z0, east);
+        appendVertex(positions, colours, x0, h01, z1, north);
+        appendVertex(positions, colours, x1, h11, z1, northEast);
+        for (int i = 0; i < 6; i++) {
+            indices.add(base + i);
+        }
+    }
+
+    private static void appendFallbackTile(Chunk chunk, int plane, int mapX, int mapY,
+                                           FloatCollector positions,
+                                           FloatCollector colours,
+                                           IntCollector indices) {
+        float x0 = mapX * TILE_SIZE;
+        float x1 = (mapX + 1) * TILE_SIZE;
+        float z0 = mapY * TILE_SIZE;
+        float z1 = (mapY + 1) * TILE_SIZE;
+        float h00 = -chunk.mapRegion.tileHeights[plane][mapX][mapY];
+        float h10 = -chunk.mapRegion.tileHeights[plane][mapX + 1][mapY];
+        float h01 = -chunk.mapRegion.tileHeights[plane][mapX][mapY + 1];
+        float h11 = -chunk.mapRegion.tileHeights[plane][mapX + 1][mapY + 1];
+        int rgb = resolveTileRgb(chunk, plane, mapX, mapY);
+
+        int base = positions.size / 3;
+        appendVertex(positions, colours, x0, h00, z0, rgb);
+        appendVertex(positions, colours, x0, h01, z1, rgb);
+        appendVertex(positions, colours, x1, h10, z0, rgb);
+        appendVertex(positions, colours, x1, h10, z0, rgb);
+        appendVertex(positions, colours, x0, h01, z1, rgb);
+        appendVertex(positions, colours, x1, h11, z1, rgb);
+        for (int i = 0; i < 6; i++) {
+            indices.add(base + i);
+        }
+    }
+
+    private static void appendVertex(FloatCollector positions, FloatCollector colours,
+                                     float x, float y, float z, int rgb) {
+        positions.add(x);
+        positions.add(y);
+        positions.add(z);
+        colours.add(((rgb >> 16) & 0xff) / 255.0f);
+        colours.add(((rgb >> 8) & 0xff) / 255.0f);
+        colours.add((rgb & 0xff) / 255.0f);
+    }
+
+    private static boolean validVertex(int index, int length) {
+        return index >= 0 && index < length;
+    }
+
+    /**
+     * RSPSi's SceneTile colours are HSL palette indices after its lighting
+     * calculations. Reusing the live software renderer's palette gives the GPU
+     * preview the same base shaded RGB without reproducing that palette logic.
+     */
+    private static int paletteRgb(int hsl, int fallbackRgb) {
+        if (hsl == HIDDEN_COLOUR || hsl < 0) {
+            return sanitiseRgb(fallbackRgb);
+        }
+        GameRasterizer rasterizer = GameRasterizer.getInstance();
+        if (rasterizer != null && rasterizer.colourPalette != null
+                && hsl >= 0 && hsl < rasterizer.colourPalette.length) {
+            return sanitiseRgb(rasterizer.colourPalette[hsl]);
+        }
+        return sanitiseRgb(fallbackRgb);
     }
 
     private static int resolveTileRgb(Chunk chunk, int plane, int mapX, int mapY) {
@@ -96,6 +221,10 @@ public final class TerrainMeshBuilder {
         if (overlayValue > 0 && FloorDefinitionLoader.instance != null) {
             Floor overlay = FloorDefinitionLoader.getOverlay(overlayValue - 1);
             if (overlay != null) {
+                int secondary = overlay.getAnotherRgb();
+                if (secondary >= 0 && secondary != 0xff00ff) {
+                    return sanitiseRgb(secondary);
+                }
                 return sanitiseRgb(overlay.getRgb());
             }
         }
@@ -112,15 +241,49 @@ public final class TerrainMeshBuilder {
     }
 
     private static int sanitiseRgb(int rgb) {
-        // A handful of cache definitions use sentinel-like values; keep the
-        // preview readable until the proper texture/secondary-colour path lands.
-        if (rgb < 0 || rgb == 0xff00ff) {
+        if (rgb < 0 || rgb == 0xff00ff || rgb == HIDDEN_COLOUR) {
             return 0x6f8f43;
         }
         return rgb & 0xffffff;
     }
 
-    private static float clamp(float value, float min, float max) {
-        return Math.max(min, Math.min(max, value));
+    private static final class FloatCollector {
+        private float[] data;
+        private int size;
+
+        private FloatCollector(int capacity) {
+            data = new float[Math.max(capacity, 32)];
+        }
+
+        private void add(float value) {
+            if (size == data.length) {
+                data = Arrays.copyOf(data, data.length * 2);
+            }
+            data[size++] = value;
+        }
+
+        private float[] toArray() {
+            return Arrays.copyOf(data, size);
+        }
+    }
+
+    private static final class IntCollector {
+        private int[] data;
+        private int size;
+
+        private IntCollector(int capacity) {
+            data = new int[Math.max(capacity, 32)];
+        }
+
+        private void add(int value) {
+            if (size == data.length) {
+                data = Arrays.copyOf(data, data.length * 2);
+            }
+            data[size++] = value;
+        }
+
+        private int[] toArray() {
+            return Arrays.copyOf(data, size);
+        }
     }
 }
