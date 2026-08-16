@@ -19,10 +19,11 @@ import org.joml.Matrix4f;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Experimental live GPU view of RSPSi's already-loaded terrain. */
+/** Experimental live GPU view of RSPSi's already-loaded scene. */
 public final class LiveTerrainPreview implements GLEventListener {
     private final Client client;
     private final List<TerrainGpuBuffer> terrain = new ArrayList<>();
+    private TerrainGpuBuffer objects;
     private final SimpleTerrainShader shader = new SimpleTerrainShader();
     private final Matrix4f viewProjection = new Matrix4f();
 
@@ -38,13 +39,13 @@ public final class LiveTerrainPreview implements GLEventListener {
 
     public static void open(Client client) {
         if (client == null || client.chunks == null || client.chunks.isEmpty()) {
-            System.out.println("[OPENGL] No loaded chunks are available for the terrain preview.");
+            System.out.println("[OPENGL] No loaded chunks are available for the scene preview.");
             return;
         }
         GLProfile.initSingleton();
         GLWindow window = GLWindow.create(new GLCapabilities(GLProfile.get(GLProfile.GL3)));
         LiveTerrainPreview preview = new LiveTerrainPreview(client);
-        window.setTitle("RSPSi for Foundry - Live OpenGL Terrain (RSPSi camera)");
+        window.setTitle("RSPSi for Foundry - Live OpenGL Scene (RSPSi camera)");
         window.setSize(1280, 720);
         window.addGLEventListener(preview);
         Animator animator = new Animator(window);
@@ -81,10 +82,10 @@ public final class LiveTerrainPreview implements GLEventListener {
         GL3 gl=drawable.getGL().getGL3(); gl.setSwapInterval(0); gl.glEnable(GL.GL_DEPTH_TEST); gl.glDisable(GL.GL_CULL_FACE);
         System.out.println("[OPENGL-LIVE] Renderer: "+gl.glGetString(GL.GL_RENDERER));
         System.out.println("[OPENGL-LIVE] Loaded chunks: "+client.chunks.size());
-        shader.init(gl); uploadLoadedTerrain(gl);
+        shader.init(gl); uploadLoadedScene(gl);
     }
 
-    private void uploadLoadedTerrain(GL3 gl){
+    private void uploadLoadedScene(GL3 gl){
         float minX=Float.POSITIVE_INFINITY,minZ=Float.POSITIVE_INFINITY,maxX=Float.NEGATIVE_INFINITY,maxZ=Float.NEGATIVE_INFINITY; int uploaded=0;
         int plane=Math.max(0,Math.min(3,client.getPlane()));
         for(Chunk chunk:client.chunks){
@@ -95,7 +96,15 @@ public final class LiveTerrainPreview implements GLEventListener {
             minX=Math.min(minX,cminx);minZ=Math.min(minZ,cminz);maxX=Math.max(maxX,cmaxx);maxZ=Math.max(maxZ,cmaxz);
         }
         if(uploaded>0){sceneCenterX=(minX+maxX)*0.5f;sceneCenterZ=(minZ+maxZ)*0.5f;sceneRadius=Math.max(maxX-minX,maxZ-minZ)*0.58f;}
+
+        TerrainMeshSnapshot objectMesh=ObjectMeshBuilder.build(plane);
+        if(objectMesh.getIndices().length>0){
+            objects=new TerrainGpuBuffer();
+            objects.upload(gl,objectMesh);
+        }
+
         System.out.println("[OPENGL-LIVE] GPU terrain chunks uploaded: "+uploaded+" | plane="+plane);
+        System.out.println("[OPENGL-LIVE] GPU object pass: "+(objects==null?"empty":"uploaded")+" (coloured/shaded models; model textures next).");
         System.out.println("[OPENGL-LIVE] Camera follows RSPSi with horizontal mirror correction.");
         System.out.println("[OPENGL-LIVE] Max-pitch endpoint is clamped one camera unit for stability.");
     }
@@ -105,10 +114,12 @@ public final class LiveTerrainPreview implements GLEventListener {
         float aspect=viewportHeight<=0?1.0f:(float)viewportWidth/(float)viewportHeight;
         CameraSnapshot camera=null;
         if(orbitOverride)buildOrbitCamera(aspect);else{camera=readStableCamera();buildRspsiCamera(aspect,camera);}
-        shader.use(gl);shader.setViewProjection(gl,viewProjection);for(TerrainGpuBuffer b:terrain)b.draw(gl);
+        shader.use(gl);shader.setViewProjection(gl,viewProjection);
+        for(TerrainGpuBuffer b:terrain)b.draw(gl);
+        if(objects!=null)objects.draw(gl);
         frames++;long now=System.nanoTime();if(now-lastFpsNanos>=1_000_000_000L){
             String pos=camera==null?(client.xCameraPos/128)+","+(client.yCameraPos/128)+","+client.zCameraPos:(camera.x/128)+","+(camera.z/128)+","+camera.height;
-            System.out.println("[OPENGL-LIVE] FPS: "+frames+" | terrainChunks="+terrain.size()+" | camera="+(orbitOverride?"orbit":"rspsi")+" | pos="+pos+" | pitch="+(camera==null?client.yCameraCurve:camera.pitch));
+            System.out.println("[OPENGL-LIVE] FPS: "+frames+" | terrainChunks="+terrain.size()+" | objects="+(objects==null?0:1)+" | camera="+(orbitOverride?"orbit":"rspsi")+" | pos="+pos+" | pitch="+(camera==null?client.yCameraCurve:camera.pitch));
             frames=0;lastFpsNanos=now;
         }
     }
@@ -138,7 +149,11 @@ public final class LiveTerrainPreview implements GLEventListener {
     }
 
     @Override public void reshape(GLAutoDrawable drawable,int x,int y,int width,int height){viewportWidth=Math.max(width,1);viewportHeight=Math.max(height,1);drawable.getGL().getGL3().glViewport(0,0,viewportWidth,viewportHeight);}
-    @Override public void dispose(GLAutoDrawable drawable){GL3 gl=drawable.getGL().getGL3();for(TerrainGpuBuffer b:terrain)b.dispose(gl);terrain.clear();shader.dispose(gl);}
+    @Override public void dispose(GLAutoDrawable drawable){
+        GL3 gl=drawable.getGL().getGL3();for(TerrainGpuBuffer b:terrain)b.dispose(gl);terrain.clear();
+        if(objects!=null){objects.dispose(gl);objects=null;}
+        shader.dispose(gl);
+    }
 
     private static final class CameraSnapshot{
         final int x,z,height,yaw,pitch;
