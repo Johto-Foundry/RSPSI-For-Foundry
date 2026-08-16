@@ -2609,6 +2609,9 @@ public class SceneGraph {
 			return;
 		}
 
+		// Object hover/edit handling only needs to run once per rendered scene, not once per tile queue seed.
+		this.handleMouseInObject();
+
 
 		int cameraX = cameraTileX / 128 - offsetX;
 		int cameraY = cameraTileY / 128 - offsetY;
@@ -3803,7 +3806,6 @@ public class SceneGraph {
 
 	public void renderTile(SceneTile newTile, boolean flag) {
 		tileQueue.addLast(newTile);
-		this.handleMouseInObject();
 		do {
 			SceneTile activeTile;
 
