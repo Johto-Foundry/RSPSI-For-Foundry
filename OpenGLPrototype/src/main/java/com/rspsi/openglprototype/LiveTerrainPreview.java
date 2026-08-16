@@ -104,8 +104,7 @@ public final class LiveTerrainPreview implements GLEventListener {
         }
 
         System.out.println("[OPENGL-LIVE] GPU terrain chunks uploaded: "+uploaded+" | plane="+plane);
-        System.out.println("[OPENGL-LIVE] GPU object pass: "+(objects==null?"empty":"uploaded")+" (coloured + textured scene models).");
-        System.out.println("[OPENGL-LIVE] Object back-face culling mirrors RSPSi's software face rejection; terrain remains two-sided while winding is validated.");
+        System.out.println("[OPENGL-LIVE] GPU object pass: "+(objects==null?"empty":"uploaded")+" (coloured/shaded models; model textures next).");
         System.out.println("[OPENGL-LIVE] Camera follows RSPSi with horizontal mirror correction.");
         System.out.println("[OPENGL-LIVE] Max-pitch endpoint is clamped one camera unit for stability.");
     }
@@ -116,26 +115,8 @@ public final class LiveTerrainPreview implements GLEventListener {
         CameraSnapshot camera=null;
         if(orbitOverride)buildOrbitCamera(aspect);else{camera=readStableCamera();buildRspsiCamera(aspect,camera);}
         shader.use(gl);shader.setViewProjection(gl,viewProjection);
-
-        // Terrain winding still contains a mixture of shaped/simple tile conventions,
-        // so keep it two-sided for now. Scene models are different: RSPSi explicitly
-        // rejects back-facing model triangles before renderFace(). Rendering both sides
-        // in GL exposed the reverse sides of foliage cards/thin ditch geometry as long
-        // black lines and large grey slabs.
-        gl.glDisable(GL.GL_CULL_FACE);
         for(TerrainGpuBuffer b:terrain)b.draw(gl);
-
-        if(objects!=null){
-            gl.glEnable(GL.GL_CULL_FACE);
-            gl.glCullFace(GL.GL_BACK);
-            // The normal RSPSi camera contains an X reflection to undo the earlier
-            // horizontal mirror. A reflection reverses triangle winding, so CW is the
-            // visible front face there. Orbit mode has no reflection and remains CCW.
-            gl.glFrontFace(orbitOverride ? GL.GL_CCW : GL.GL_CW);
-            objects.draw(gl);
-            gl.glDisable(GL.GL_CULL_FACE);
-        }
-
+        if(objects!=null)objects.draw(gl);
         frames++;long now=System.nanoTime();if(now-lastFpsNanos>=1_000_000_000L){
             String pos=camera==null?(client.xCameraPos/128)+","+(client.yCameraPos/128)+","+client.zCameraPos:(camera.x/128)+","+(camera.z/128)+","+camera.height;
             System.out.println("[OPENGL-LIVE] FPS: "+frames+" | terrainChunks="+terrain.size()+" | objects="+(objects==null?0:1)+" | camera="+(orbitOverride?"orbit":"rspsi")+" | pos="+pos+" | pitch="+(camera==null?client.yCameraCurve:camera.pitch));
