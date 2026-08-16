@@ -313,6 +313,7 @@ public final class Client implements Runnable {
 	private String errorMessage = "";
 	public boolean visible = true;
 	public final void draw() {
+		long frameStart = System.nanoTime();
 		if(errorDisplayed.get())
 			return;
 		if (gameAlreadyLoaded || error || unableToLoad) {
@@ -325,6 +326,7 @@ public final class Client implements Runnable {
 			drawGameScreen();
 		}
 		handleResize();
+		lastFrameMs = (System.nanoTime() - frameStart) / 1_000_000.0;
 
 	}
 
@@ -374,7 +376,9 @@ public final class Client implements Runnable {
 		}
 
 		if (loadState == LoadState.ACTIVE) {
+			long renderStart = System.nanoTime();
 			renderView();
+			lastRenderMs = (System.nanoTime() - renderStart) / 1_000_000.0;
 		}
 
 		
@@ -1005,6 +1009,9 @@ public final class Client implements Runnable {
 			}
 
 			k += TextRenderUtils.renderLeft(gameImageBuffer, "Fps: " + fps, c, k, i1);
+			k += TextRenderUtils.renderLeft(gameImageBuffer, String.format("Frame: %.2f ms", lastFrameMs), c, k, i1);
+			k += TextRenderUtils.renderLeft(gameImageBuffer, String.format("Render: %.2f ms", lastRenderMs), c, k, i1);
+			k += TextRenderUtils.renderLeft(gameImageBuffer, String.format("Present prep: %.2f ms", lastPresentPrepareMs), c, k, i1);
 			Runtime runtime = Runtime.getRuntime();
 			int memory = (int) ((runtime.totalMemory() - runtime.freeMemory()) / 1024);
 			i1 = 0xffff00;
@@ -1178,7 +1185,9 @@ public final class Client implements Runnable {
 	}
 	
 	public void drawGameImage() {
+		long presentStart = System.nanoTime();
 		gameImageBuffer.finalize();
+		lastPresentPrepareMs = (System.nanoTime() - presentStart) / 1_000_000.0;
 		WritableImage finalImg = gameImageBuffer.finalImage;
 		Platform.runLater(() -> {
 			drawImage(finalImg);
@@ -1574,6 +1583,9 @@ public final class Client implements Runnable {
 	public DisplayCanvas gameCanvas;
 	public boolean debug = false;
 	public int fps;
+	public double lastFrameMs;
+	public double lastRenderMs;
+	public double lastPresentPrepareMs;
 	public DisplayCanvas mapCanvas;
 	public DisplayCanvas fullMapCanvas;
 	public int canvasHeight;
