@@ -2,8 +2,21 @@ plugins {
     id 'application'
 }
 
+sourceSets {
+    main {
+        java {
+            if (project.hasProperty('standaloneOpenGL')) {
+                exclude 'com/rspsi/openglprototype/CurrentSceneBridge.java'
+                exclude 'com/rspsi/openglprototype/TerrainMeshBuilder.java'
+            }
+        }
+    }
+}
+
 dependencies {
-    implementation project(':Client')
+    if (!project.hasProperty('standaloneOpenGL')) {
+        implementation project(':Client')
+    }
     implementation 'com.metsci.ext.org.jogamp.gluegen:gluegen-rt-main:2.4.0-rc-20200202'
     implementation 'com.metsci.ext.org.jogamp.jogl:jogl-all-main:2.4.0-rc-20200202'
     implementation 'org.joml:joml:1.9.24'
