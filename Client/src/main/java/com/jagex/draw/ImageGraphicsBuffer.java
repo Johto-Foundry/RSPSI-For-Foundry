@@ -53,9 +53,7 @@ public class ImageGraphicsBuffer extends ProducingGraphicsBuffer {
 	}
 
 	public void clearPixels(int rgb) {
-		for (int i = 0; i < pixels.length; i++) {
-			pixels[i] = 0xFF000000 | rgb;
-		}
+		Arrays.fill(pixels, 0xFF000000 | rgb);
 	}
 
 	@Override
