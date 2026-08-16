@@ -191,7 +191,7 @@ public final class LiveTerrainPreview implements GLEventListener {
         }
 
         System.out.println("[OPENGL-LIVE] GPU terrain chunks uploaded: " + uploaded + " | plane=" + plane);
-        System.out.println("[OPENGL-LIVE] Camera now mirrors RSPSi. Move/rotate the normal editor camera to compare views.");
+        System.out.println("[OPENGL-LIVE] Camera now mirrors RSPSi axes directly. Move/rotate the normal editor camera to compare views.");
         System.out.println("[OPENGL-LIVE] Hold right mouse in this window for temporary whole-map orbit mode.");
     }
 
@@ -226,6 +226,19 @@ public final class LiveTerrainPreview implements GLEventListener {
         }
     }
 
+    /**
+     * Match the legacy SceneGraph camera basis rather than approximating it as a
+     * conventional yaw around +Z.  SceneGraph transforms horizontal coordinates
+     * as:
+     *   screenX = dx*sin(yaw) + dz*cos(yaw)
+     *   forward = dx*cos(yaw) - dz*sin(yaw)
+     * so yaw zero looks along +world-X, not +world-Z.  The previous approximation
+     * was therefore effectively rotated/reflected relative to the editor.
+     *
+     * A camera-local up vector is supplied explicitly.  This stays orthogonal to
+     * the forward vector even at the editor's extreme pitch, avoiding lookAt's
+     * instability when a fixed world-up vector becomes nearly parallel to view.
+     */
     private void buildRspsiCamera(float aspect) {
         float eyeX = client.xCameraPos;
         float eyeY = -client.zCameraPos;
@@ -233,14 +246,22 @@ public final class LiveTerrainPreview implements GLEventListener {
 
         float yaw = (float) (client.xCameraCurve * (Math.PI * 2.0 / 2048.0));
         float pitch = (float) (client.yCameraCurve * (Math.PI * 2.0 / 2048.0));
+        float sinYaw = (float) Math.sin(yaw);
+        float cosYaw = (float) Math.cos(yaw);
+        float sinPitch = (float) Math.sin(pitch);
         float cosPitch = (float) Math.cos(pitch);
-        float dirX = -(float) Math.sin(yaw) * cosPitch;
-        float dirY = -(float) Math.sin(pitch);
-        float dirZ = (float) Math.cos(yaw) * cosPitch;
 
-        if (Math.abs(dirX) + Math.abs(dirY) + Math.abs(dirZ) < 0.0001f) {
-            dirZ = 1.0f;
-        }
+        // Legacy RSPSi/Jagex camera forward direction, expressed in the OpenGL
+        // mesh coordinate system (X=world X, Y=-world height, Z=world Y).
+        float dirX = cosYaw * cosPitch;
+        float dirY = -sinPitch;
+        float dirZ = -sinYaw * cosPitch;
+
+        // Camera-local up derived from the same yaw/pitch basis.  Unlike fixed
+        // (0,1,0), this cannot become parallel to dir at maximum pitch.
+        float upX = cosYaw * sinPitch;
+        float upY = cosPitch;
+        float upZ = -sinYaw * sinPitch;
 
         viewProjection.identity()
                 .perspective((float) Math.toRadians(55.0), aspect, 16.0f, 150000.0f)
@@ -248,7 +269,7 @@ public final class LiveTerrainPreview implements GLEventListener {
                         eyeX + dirX * 1024.0f,
                         eyeY + dirY * 1024.0f,
                         eyeZ + dirZ * 1024.0f,
-                        0.0f, 1.0f, 0.0f);
+                        upX, upY, upZ);
     }
 
     private void buildOrbitCamera(float aspect) {
