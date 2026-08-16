@@ -1,0 +1,129 @@
+name: Apply render stage profiler
+
+on:
+  push:
+    branches:
+      - performance-render-breakdown
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: performance-render-breakdown
+      - name: Add render stage timings
+        shell: python
+        run: |
+          from pathlib import Path
+          path = Path('Client/src/main/java/com/jagex/Client.java')
+          text = path.read_text()
+
+          field = '\tprivate long lastPerfConsoleLog = 0L;'
+          if field not in text:
+              raise SystemExit('Could not find console profiler field')
+          text = text.replace(field, field + '\n\tprivate long lastRenderBreakdownLog = 0L;', 1)
+
+          start = text.index('\tpublic final void renderView() {')
+          end = text.index('\n\tpublic void drawGameImage() {', start)
+
+          replacement = r'''	public final void renderView() {
+		long renderViewStart = System.nanoTime();
+
+		long stageStart = System.nanoTime();
+		for (Chunk chunk : chunks) {
+			chunk.processAnimableObjects();
+		}
+		double animablesMs = (System.nanoTime() - stageStart) / 1_000_000.0;
+
+		stageStart = System.nanoTime();
+		int i = cameraRoll;
+		int k = cameraYaw + anInt896 & 0x7ff;
+		method144(600 + i * 3, i, k);
+		int currentPlane = method120();
+
+		Mesh.aBoolean1684 = true;
+		Mesh.mouseX = mouseEventX;
+		Mesh.mouseY = mouseEventY;
+		gameImageBuffer.initializeRasterizer();
+		GameRasterizer.getInstance().reset();
+		if (cameraMoved) {
+			if (Options.showCamera.get()) {
+				SceneGraph.minimapUpdate = true;
+			}
+			Chunk current = this.getCurrentChunk();
+			if (current != this.lastChunk) {
+				lastChunk = current;
+				SceneGraph.minimapUpdate = true;
+			}
+			cameraMoved = false;
+		}
+		Mesh.resourceCount = 0;
+		double setupMs = (System.nanoTime() - stageStart) / 1_000_000.0;
+
+		stageStart = System.nanoTime();
+		for (Chunk chunk : chunks) {
+			try {
+				sceneGraph.setChunk(chunk);
+				sceneGraph.renderScene(xCameraPos, yCameraPos, xCameraCurve, zCameraPos, currentPlane, yCameraCurve);
+			} catch (Exception ex) {
+				ex.printStackTrace();
+			}
+		}
+		double chunksMs = (System.nanoTime() - stageStart) / 1_000_000.0;
+
+		stageStart = System.nanoTime();
+		if (Mesh.resourceCount > 0)
+			hoveredUID = Mesh.resourceIDTag[Mesh.resourceCount - 1];
+		else
+			hoveredUID = null;
+
+		for (Runnable r : Lists.newArrayList(SceneGraph.onCycleEnd)) {
+			if (r != null) {
+				try {
+					r.run();
+				} catch (Exception ex) {
+					ex.printStackTrace();
+				}
+			}
+			SceneGraph.onCycleEnd.remove(r);
+		}
+		double cycleEndMs = (System.nanoTime() - stageStart) / 1_000_000.0;
+
+		stageStart = System.nanoTime();
+		sceneGraph.cleanUpShortLivedObjects();
+		double cleanupMs = (System.nanoTime() - stageStart) / 1_000_000.0;
+
+		stageStart = System.nanoTime();
+		drawDebugOverlay();
+		double debugMs = (System.nanoTime() - stageStart) / 1_000_000.0;
+
+		stageStart = System.nanoTime();
+		gameImageBuffer.finalize();
+		double finalizeMs = (System.nanoTime() - stageStart) / 1_000_000.0;
+
+		double totalMs = (System.nanoTime() - renderViewStart) / 1_000_000.0;
+		long now = System.currentTimeMillis();
+		if (now - lastRenderBreakdownLog >= 1000L) {
+			lastRenderBreakdownLog = now;
+			System.out.printf("[RENDER] total=%.2f ms | anim=%.2f | setup=%.2f | chunks=%.2f | cycle=%.2f | cleanup=%.2f | debug=%.2f | finalize=%.2f | loadedChunks=%d%n",
+				totalMs, animablesMs, setupMs, chunksMs, cycleEndMs, cleanupMs, debugMs, finalizeMs, chunks.size());
+		}
+	}
+'''
+
+          text = text[:start] + replacement + text[end:]
+          path.write_text(text)
+      - name: Remove one-shot workflow
+        run: rm .github/workflows/apply-render-breakdown.yml
+      - name: Commit profiler
+        run: |
+          git config user.name "Johto-Foundry"
+          git config user.email "314530853+Johto-Foundry@users.noreply.github.com"
+          git add Client/src/main/java/com/jagex/Client.java .github/workflows/apply-render-breakdown.yml
+          git commit -m "Add render-stage performance breakdown"
+          git push origin performance-render-breakdown
