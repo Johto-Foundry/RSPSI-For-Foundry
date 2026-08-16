@@ -3,21 +3,25 @@ package com.rspsi.openglprototype;
 import com.jogamp.opengl.GL3;
 import org.joml.Matrix4f;
 
-/** Minimal shader used to prove the Foundry OpenGL draw pipeline before RuneLite shaders are transplanted. */
+/** Minimal terrain shader used while the full RuneLite-style GPU pipeline is transplanted. */
 public final class SimpleTerrainShader {
     private static final String VERTEX =
             "#version 330 core\n" +
             "layout(location = 0) in vec3 aPosition;\n" +
+            "layout(location = 1) in vec3 aColour;\n" +
             "uniform mat4 uViewProjection;\n" +
+            "out vec3 vColour;\n" +
             "void main() {\n" +
+            "    vColour = aColour;\n" +
             "    gl_Position = uViewProjection * vec4(aPosition, 1.0);\n" +
             "}\n";
 
     private static final String FRAGMENT =
             "#version 330 core\n" +
+            "in vec3 vColour;\n" +
             "out vec4 fragColor;\n" +
             "void main() {\n" +
-            "    fragColor = vec4(0.64, 0.78, 0.46, 1.0);\n" +
+            "    fragColor = vec4(vColour, 1.0);\n" +
             "}\n";
 
     private int program;
