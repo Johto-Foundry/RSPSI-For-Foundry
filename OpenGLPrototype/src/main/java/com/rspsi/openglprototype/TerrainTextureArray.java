@@ -38,11 +38,22 @@ public final class TerrainTextureArray {
         gl.glTexImage3D(GL3.GL_TEXTURE_2D_ARRAY, 0, GL.GL_RGBA8, LAYER_SIZE, LAYER_SIZE, layerCount, 0, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, null);
 
         int uploaded = 0;
+        int transparentLayers = 0;
         for (int textureId = 0; textureId < layerCount; textureId++) {
             int[] pixels;
             try { pixels = TextureLoader.getTexturePixels(textureId); } catch (RuntimeException ex) { continue; }
             if (pixels == null || pixels.length < TEXELS_PER_LAYER) continue;
-            ByteBuffer rgba = rasterizerPixelsToRgba(pixels);
+
+            // This distinction is important. The software rasterizer only treats zero
+            // texels as cut-outs when the TextureLoader says this texture supports
+            // transparency. For an opaque texture, RGB 0 is a real black texel and
+            // must cover geometry behind it rather than becoming a hole.
+            boolean supportsAlpha;
+            try { supportsAlpha = TextureLoader.getTextureTransparent(textureId); }
+            catch (RuntimeException ex) { supportsAlpha = false; }
+            if (supportsAlpha) transparentLayers++;
+
+            ByteBuffer rgba = rasterizerPixelsToRgba(pixels, supportsAlpha);
             gl.glTexSubImage3D(GL3.GL_TEXTURE_2D_ARRAY, 0, 0, 0, textureId, LAYER_SIZE, LAYER_SIZE, 1, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, rgba);
             uploaded++;
         }
@@ -50,47 +61,52 @@ public final class TerrainTextureArray {
         gl.glGenerateMipmap(GL3.GL_TEXTURE_2D_ARRAY);
         gl.glBindTexture(GL3.GL_TEXTURE_2D_ARRAY, 0);
         System.out.println("[OPENGL-TEXTURES] GPU texture array ready: " + uploaded + "/" + layerCount
-                + " rasterizer textures (" + LAYER_SIZE + "x" + LAYER_SIZE + ", alpha-edge bleed + mipmaps).");
+                + " rasterizer textures (" + LAYER_SIZE + "x" + LAYER_SIZE
+                + ", RS transparency=" + transparentLayers + " layers, alpha-edge bleed + mipmaps).");
     }
 
-    private ByteBuffer rasterizerPixelsToRgba(int[] pixels) {
+    private ByteBuffer rasterizerPixelsToRgba(int[] pixels, boolean supportsAlpha) {
         int[] rgb = new int[TEXELS_PER_LAYER];
         boolean[] opaque = new boolean[TEXELS_PER_LAYER];
 
         for (int i = 0; i < TEXELS_PER_LAYER; i++) {
             int value = pixels[i] & 0xffffff;
             rgb[i] = value;
-            opaque[i] = value != 0 && value != 0xff00ff;
+            // Match GameRasterizer.drawTexturedLine: transparent textures skip zero
+            // texels; opaque textures write them. 0xff00ff is retained as a cut-out
+            // safeguard for sprite-backed textures that expose the legacy key colour.
+            opaque[i] = !supportsAlpha || (value != 0 && value != 0xff00ff);
         }
 
-        // Fill RGB beneath transparent cut-out texels from nearby opaque texels.
-        // Alpha remains zero. This prevents GL_LINEAR from interpolating visible
-        // foliage/cobweb edges toward transparent black and creating dark halos.
+        // Only cut-out textures need RGB dilation beneath alpha=0. Opaque textures
+        // must preserve their real black texels exactly.
         int[] bled = rgb.clone();
-        boolean[] known = opaque.clone();
-        for (int pass = 0; pass < 4; pass++) {
-            int[] next = bled.clone();
-            boolean[] nextKnown = known.clone();
-            boolean changed = false;
-            for (int y = 0; y < LAYER_SIZE; y++) {
-                for (int x = 0; x < LAYER_SIZE; x++) {
-                    int i = y * LAYER_SIZE + x;
-                    if (known[i]) continue;
-                    int count = 0, r = 0, g = 0, b = 0;
-                    if (x > 0 && known[i - 1]) { int v=bled[i-1]; r+=(v>>16)&255; g+=(v>>8)&255; b+=v&255; count++; }
-                    if (x+1 < LAYER_SIZE && known[i + 1]) { int v=bled[i+1]; r+=(v>>16)&255; g+=(v>>8)&255; b+=v&255; count++; }
-                    if (y > 0 && known[i - LAYER_SIZE]) { int v=bled[i-LAYER_SIZE]; r+=(v>>16)&255; g+=(v>>8)&255; b+=v&255; count++; }
-                    if (y+1 < LAYER_SIZE && known[i + LAYER_SIZE]) { int v=bled[i+LAYER_SIZE]; r+=(v>>16)&255; g+=(v>>8)&255; b+=v&255; count++; }
-                    if (count > 0) {
-                        next[i] = ((r/count)<<16)|((g/count)<<8)|(b/count);
-                        nextKnown[i] = true;
-                        changed = true;
+        if (supportsAlpha) {
+            boolean[] known = opaque.clone();
+            for (int pass = 0; pass < 4; pass++) {
+                int[] next = bled.clone();
+                boolean[] nextKnown = known.clone();
+                boolean changed = false;
+                for (int y = 0; y < LAYER_SIZE; y++) {
+                    for (int x = 0; x < LAYER_SIZE; x++) {
+                        int i = y * LAYER_SIZE + x;
+                        if (known[i]) continue;
+                        int count = 0, r = 0, g = 0, b = 0;
+                        if (x > 0 && known[i - 1]) { int v=bled[i-1]; r+=(v>>16)&255; g+=(v>>8)&255; b+=v&255; count++; }
+                        if (x+1 < LAYER_SIZE && known[i + 1]) { int v=bled[i+1]; r+=(v>>16)&255; g+=(v>>8)&255; b+=v&255; count++; }
+                        if (y > 0 && known[i - LAYER_SIZE]) { int v=bled[i-LAYER_SIZE]; r+=(v>>16)&255; g+=(v>>8)&255; b+=v&255; count++; }
+                        if (y+1 < LAYER_SIZE && known[i + LAYER_SIZE]) { int v=bled[i+LAYER_SIZE]; r+=(v>>16)&255; g+=(v>>8)&255; b+=v&255; count++; }
+                        if (count > 0) {
+                            next[i] = ((r/count)<<16)|((g/count)<<8)|(b/count);
+                            nextKnown[i] = true;
+                            changed = true;
+                        }
                     }
                 }
+                bled = next;
+                known = nextKnown;
+                if (!changed) break;
             }
-            bled = next;
-            known = nextKnown;
-            if (!changed) break;
         }
 
         ByteBuffer out = ByteBuffer.allocateDirect(TEXELS_PER_LAYER * 4);
