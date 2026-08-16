@@ -38,7 +38,6 @@ public final class LiveTerrainPreview implements GLEventListener {
     private int viewportWidth = 1280;
     private int viewportHeight = 720;
 
-    // Whole-map fallback/orbit camera retained for debugging.
     private float sceneCenterX;
     private float sceneCenterZ;
     private float sceneRadius = 12000.0f;
@@ -77,7 +76,6 @@ public final class LiveTerrainPreview implements GLEventListener {
             public void mousePressed(MouseEvent e) {
                 preview.dragX = e.getX();
                 preview.dragY = e.getY();
-                // Right mouse is a temporary whole-map/orbit debugging camera.
                 if ((e.getModifiers() & MouseEvent.BUTTON3_MASK) != 0) {
                     preview.orbitOverride = true;
                 }
@@ -137,11 +135,17 @@ public final class LiveTerrainPreview implements GLEventListener {
         GL3 gl = drawable.getGL().getGL3();
         gl.setSwapInterval(0);
         gl.glEnable(GL.GL_DEPTH_TEST);
-        gl.glEnable(GL.GL_CULL_FACE);
-        gl.glCullFace(GL.GL_BACK);
+
+        // RSPSi's shaped-tile triangle order is not guaranteed to share one GL
+        // winding convention after the Jagex -> OpenGL axis conversion. Render
+        // terrain double-sided for now so a valid face can never become a black
+        // hole simply because GL_BACK culling rejected it. Once every terrain
+        // path has a canonical winding we can safely re-enable face culling.
+        gl.glDisable(GL.GL_CULL_FACE);
 
         System.out.println("[OPENGL-LIVE] Renderer: " + gl.glGetString(GL.GL_RENDERER));
         System.out.println("[OPENGL-LIVE] Loaded chunks: " + client.chunks.size());
+        System.out.println("[OPENGL-LIVE] Terrain face culling disabled while tile winding is validated.");
 
         shader.init(gl);
         uploadLoadedTerrain(gl);
@@ -222,29 +226,18 @@ public final class LiveTerrainPreview implements GLEventListener {
         }
     }
 
-    /**
-     * Mirrors the coordinate system used by SceneGraph.renderScene(). RSPSi's
-     * X/Y are ground-plane coordinates and zCameraPos is vertical. Our OpenGL
-     * terrain uses X/Z for the ground plane and -tileHeight for vertical Y.
-     */
     private void buildRspsiCamera(float aspect) {
         float eyeX = client.xCameraPos;
         float eyeY = -client.zCameraPos;
         float eyeZ = client.yCameraPos;
 
-        // Jagex angle units are 0..2047 for one complete turn.
         float yaw = (float) (client.xCameraCurve * (Math.PI * 2.0 / 2048.0));
         float pitch = (float) (client.yCameraCurve * (Math.PI * 2.0 / 2048.0));
-
-        // Matches Client.handleKeyInputs(): forward is -sin(yaw), +cos(yaw)
-        // on the map plane. Converting client vertical Z to OpenGL Y negates
-        // the pitch contribution.
         float cosPitch = (float) Math.cos(pitch);
         float dirX = -(float) Math.sin(yaw) * cosPitch;
         float dirY = -(float) Math.sin(pitch);
         float dirZ = (float) Math.cos(yaw) * cosPitch;
 
-        // Avoid a degenerate lookAt if a future camera state becomes vertical.
         if (Math.abs(dirX) + Math.abs(dirY) + Math.abs(dirZ) < 0.0001f) {
             dirZ = 1.0f;
         }
