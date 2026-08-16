@@ -25,7 +25,21 @@ public final class TerrainGpuBuffer {
         gl.glGenBuffers(1, handles, 0);
         ebo = handles[0];
 
-        FloatBuffer vertices = Buffers.newDirectFloatBuffer(mesh.getPositions());
+        float[] positions = mesh.getPositions();
+        float[] colours = mesh.getColours();
+        float[] packedVertices = new float[mesh.getVertexCount() * 6];
+        for (int vertex = 0; vertex < mesh.getVertexCount(); vertex++) {
+            int source = vertex * 3;
+            int target = vertex * 6;
+            packedVertices[target] = positions[source];
+            packedVertices[target + 1] = positions[source + 1];
+            packedVertices[target + 2] = positions[source + 2];
+            packedVertices[target + 3] = colours[source];
+            packedVertices[target + 4] = colours[source + 1];
+            packedVertices[target + 5] = colours[source + 2];
+        }
+
+        FloatBuffer vertices = Buffers.newDirectFloatBuffer(packedVertices);
         IntBuffer indices = Buffers.newDirectIntBuffer(mesh.getIndices());
         indexCount = mesh.getIndices().length;
 
@@ -43,8 +57,11 @@ public final class TerrainGpuBuffer {
                 indices,
                 GL.GL_STATIC_DRAW);
 
+        int stride = 6 * Float.BYTES;
         gl.glEnableVertexAttribArray(0);
-        gl.glVertexAttribPointer(0, 3, GL.GL_FLOAT, false, 3 * Float.BYTES, 0L);
+        gl.glVertexAttribPointer(0, 3, GL.GL_FLOAT, false, stride, 0L);
+        gl.glEnableVertexAttribArray(1);
+        gl.glVertexAttribPointer(1, 3, GL.GL_FLOAT, false, stride, 3L * Float.BYTES);
 
         gl.glBindVertexArray(0);
     }
