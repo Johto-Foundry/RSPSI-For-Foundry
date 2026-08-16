@@ -1,9 +1,11 @@
 package com.rspsi.openglprototype;
 
+import com.jagex.Client;
 import com.jagex.cache.def.Floor;
 import com.jagex.cache.loader.floor.FloorDefinitionLoader;
 import com.jagex.chunk.Chunk;
 import com.jagex.draw.raster.GameRasterizer;
+import com.jagex.map.SceneGraph;
 import com.jagex.map.tile.SceneTile;
 import com.jagex.map.tile.ShapedTile;
 import com.jagex.map.tile.SimpleTile;
@@ -28,13 +30,12 @@ public final class TerrainMeshBuilder {
     }
 
     public static TerrainMeshSnapshot build(Chunk chunk, int plane) {
-        if (chunk == null || chunk.mapRegion == null || chunk.sceneGraph == null) {
+        Client client = Client.getSingleton();
+        SceneGraph sceneGraph = client == null ? null : client.sceneGraph;
+        if (chunk == null || chunk.mapRegion == null || sceneGraph == null) {
             return new TerrainMeshSnapshot(new float[0], new float[0], new int[0]);
         }
 
-        // Worst case: shaped tiles currently contain at most six triangles.
-        // We intentionally duplicate vertices per triangle so each triangle can
-        // retain the exact colour triplet produced by RSPSi's tile builder.
         FloatCollector positions = new FloatCollector(CHUNK_SIZE * CHUNK_SIZE * 18 * 3);
         FloatCollector colours = new FloatCollector(CHUNK_SIZE * CHUNK_SIZE * 18 * 3);
         IntCollector indices = new IntCollector(CHUNK_SIZE * CHUNK_SIZE * 18);
@@ -49,14 +50,12 @@ public final class TerrainMeshBuilder {
                 int mapY = chunk.offsetY + localY;
 
                 SceneTile tile = null;
-                if (plane >= 0 && plane < chunk.sceneGraph.tiles.length
-                        && mapX >= 0 && mapX < chunk.sceneGraph.width
-                        && mapY >= 0 && mapY < chunk.sceneGraph.length) {
-                    tile = chunk.sceneGraph.tiles[plane][mapX][mapY];
+                if (plane >= 0 && plane < sceneGraph.tiles.length
+                        && mapX >= 0 && mapX < sceneGraph.width
+                        && mapY >= 0 && mapY < sceneGraph.length) {
+                    tile = sceneGraph.tiles[plane][mapX][mapY];
                 }
 
-                // Respect temporary editor tile state where possible, because
-                // this preview is intended to become the live editor viewport.
                 ShapedTile shaped = tile == null ? null
                         : tile.temporaryShapedTile.orElse(tile.shape);
                 SimpleTile simple = tile == null ? null
@@ -69,8 +68,6 @@ public final class TerrainMeshBuilder {
                     appendSimpleTile(chunk, plane, mapX, mapY, simple, positions, colours, indices);
                     simpleTiles++;
                 } else {
-                    // During map loading there can briefly be no SceneTile yet.
-                    // Keep a conservative fallback so the preview remains usable.
                     appendFallbackTile(chunk, plane, mapX, mapY, positions, colours, indices);
                     fallbackTiles++;
                 }
@@ -119,7 +116,6 @@ public final class TerrainMeshBuilder {
             appendVertex(positions, colours, xs[ib], -ys[ib], zs[ib], paletteRgb(colourB, tile.getUnderlayColour()));
             appendVertex(positions, colours, xs[ic], -ys[ic], zs[ic], paletteRgb(colourC, tile.getTextureColour()));
 
-            // Winding matches the working height-only renderer/OpenGL camera.
             indices.add(base);
             indices.add(base + 1);
             indices.add(base + 2);
@@ -140,13 +136,12 @@ public final class TerrainMeshBuilder {
         float h01 = -chunk.mapRegion.tileHeights[plane][mapX][mapY + 1];
         float h11 = -chunk.mapRegion.tileHeights[plane][mapX + 1][mapY + 1];
 
-        int centre = paletteRgb(tile.getCentreColour(), resolveTileRgb(chunk, plane, mapX, mapY));
-        int east = paletteRgb(tile.getEastColour(), centre);
-        int north = paletteRgb(tile.getNorthColour(), centre);
-        int northEast = paletteRgb(tile.getNorthEastColour(), centre);
+        int fallback = resolveTileRgb(chunk, plane, mapX, mapY);
+        int centre = paletteRgb(tile.getCentreColour(), fallback);
+        int east = paletteRgb(tile.getEastColour(), fallback);
+        int north = paletteRgb(tile.getNorthColour(), fallback);
+        int northEast = paletteRgb(tile.getNorthEastColour(), fallback);
 
-        // Same two-triangle split used by the classic SimpleTile path, with
-        // separate vertices so per-corner colours can interpolate on the GPU.
         int base = positions.size / 3;
         appendVertex(positions, colours, x0, h00, z0, centre);
         appendVertex(positions, colours, x0, h01, z1, north);
@@ -199,11 +194,6 @@ public final class TerrainMeshBuilder {
         return index >= 0 && index < length;
     }
 
-    /**
-     * RSPSi's SceneTile colours are HSL palette indices after its lighting
-     * calculations. Reusing the live software renderer's palette gives the GPU
-     * preview the same base shaded RGB without reproducing that palette logic.
-     */
     private static int paletteRgb(int hsl, int fallbackRgb) {
         if (hsl == HIDDEN_COLOUR || hsl < 0) {
             return sanitiseRgb(fallbackRgb);
