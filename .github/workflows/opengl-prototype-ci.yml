@@ -17,7 +17,8 @@ jobs:
         with:
           distribution: temurin
           java-version: '8'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '6.1'
       - name: Build working editor and OpenGL prototype
-        run: |
-          chmod +x gradlew
-          ./gradlew :Editor:classes :OpenGLPrototype:classes --stacktrace
+        run: gradle :Editor:classes :OpenGLPrototype:classes --stacktrace
