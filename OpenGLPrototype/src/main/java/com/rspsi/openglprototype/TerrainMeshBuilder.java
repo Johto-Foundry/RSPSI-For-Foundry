@@ -3,6 +3,7 @@ package com.rspsi.openglprototype;
 import com.jagex.Client;
 import com.jagex.cache.def.Floor;
 import com.jagex.cache.loader.floor.FloorDefinitionLoader;
+import com.jagex.cache.loader.textures.TextureLoader;
 import com.jagex.chunk.Chunk;
 import com.jagex.draw.raster.GameRasterizer;
 import com.jagex.map.SceneGraph;
@@ -45,8 +46,11 @@ public final class TerrainMeshBuilder {
         int textured=0;
         for(int tri=0;tri<a.length;tri++){
             int ia=a[tri],ib=b[tri],ic=cc[tri]; if(!valid(ia,xs.length)||!valid(ib,xs.length)||!valid(ic,xs.length))continue;
-            int textureId=(textures!=null&&tri<textures.length)?textures[tri]:-1; boolean hasTexture=textureId>=0; if(hasTexture)textured++;
-            int fb=t.getUnderlayColour(); if(hasTexture){ if(display!=null&&tri<display.length)fb=paletteRgb(display[tri],t.getTextureColour()); else fb=paletteRgb(t.getTextureColour(),t.getUnderlayColour()); }
+            int requestedTextureId=(textures!=null&&tri<textures.length)?textures[tri]:-1;
+            boolean hasTexture=textureAvailable(requestedTextureId);
+            int textureId=hasTexture?requestedTextureId:-1;
+            if(hasTexture)textured++;
+            int fb=t.getUnderlayColour(); if(requestedTextureId>=0){ if(display!=null&&tri<display.length)fb=paletteRgb(display[tri],t.getTextureColour()); else fb=paletteRgb(t.getTextureColour(),t.getUnderlayColour()); }
             int ca=ha!=null&&tri<ha.length?ha[tri]:fb, cb=hb!=null&&tri<hb.length?hb[tri]:fb, cv=hc!=null&&tri<hc.length?hc[tri]:fb;
             int base=p.size/3;
             vertex(p,c,uv,tex,xs[ia],-ys[ia],zs[ia],paletteRgb(ca,fb),textureId);
@@ -61,19 +65,19 @@ public final class TerrainMeshBuilder {
         float x0=x*TILE_SIZE,x1=(x+1)*TILE_SIZE,z0=y*TILE_SIZE,z1=(y+1)*TILE_SIZE;
         float h00=-chunk.mapRegion.tileHeights[plane][x][y],h10=-chunk.mapRegion.tileHeights[plane][x+1][y],h01=-chunk.mapRegion.tileHeights[plane][x][y+1],h11=-chunk.mapRegion.tileHeights[plane][x+1][y+1];
         int floor=resolveTileRgb(chunk,plane,x,y);
-        // The raw texture field is not, by itself, proof that RSPSi intended this
-        // SimpleTile to be texture sampled.  SimpleTile carries an explicit
-        // `textured` decision after editor/HD-texture options are applied.  Using
-        // texture>=0 here caused ordinary colour-shaded terrain to sample whatever
-        // cache texture happened to occupy that ID (the repeated wooden-door look).
-        boolean hasTexture=t.isTextured()&&t.getTexture()>=0;
+        boolean requestedTexture=t.isTextured()&&t.getTexture()>=0;
+        boolean hasTexture=requestedTexture&&textureAvailable(t.getTexture());
         int textureId=hasTexture?t.getTexture():-1;
-        int fb=hasTexture?paletteRgb(t.getColour(),floor):floor;
+        int fb=requestedTexture?paletteRgb(t.getColour(),floor):floor;
         int centre=paletteRgb(t.getCentreColour(),fb),east=paletteRgb(t.getEastColour(),fb),north=paletteRgb(t.getNorthColour(),fb),ne=paletteRgb(t.getNorthEastColour(),fb);
         int base=p.size/3;
         vertex(p,c,uv,tex,x0,h00,z0,centre,textureId); vertex(p,c,uv,tex,x0,h01,z1,north,textureId); vertex(p,c,uv,tex,x1,h10,z0,east,textureId);
         vertex(p,c,uv,tex,x1,h10,z0,east,textureId); vertex(p,c,uv,tex,x0,h01,z1,north,textureId); vertex(p,c,uv,tex,x1,h11,z1,ne,textureId);
         for(int i=0;i<6;i++)ind.add(base+i); return hasTexture;
+    }
+
+    private static boolean textureAvailable(int textureId){
+        return textureId>=0&&TextureLoader.instance!=null&&textureId<TextureLoader.instance.count()&&TextureLoader.getTexture(textureId)!=null;
     }
 
     private static void appendFallback(Chunk chunk,int plane,int x,int y,FloatCollector p,FloatCollector c,FloatCollector uv,FloatCollector tex,IntCollector ind){
