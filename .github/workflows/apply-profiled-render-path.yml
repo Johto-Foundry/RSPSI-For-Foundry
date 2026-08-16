@@ -1,0 +1,48 @@
+name: Apply profiling to combined render-path test
+
+on:
+  push:
+    branches:
+      - performance-profiled-render-path
+    paths:
+      - '.github/workflows/apply-profiled-render-path.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: performance-profiled-render-path
+          fetch-depth: 0
+      - name: Add frame timing instrumentation
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('Client/src/main/java/com/jagex/Client.java')
+          text = path.read_text()
+          replacements = [
+              ('''\tpublic final void draw() {\n\t\tif(errorDisplayed.get())\n\t\t\treturn;\n''', '''\tpublic final void draw() {\n\t\tlong frameStart = System.nanoTime();\n\t\tif(errorDisplayed.get())\n\t\t\treturn;\n'''),
+              ('''\t\tif(visible) {\n\t\t\tdrawGameScreen();\n\t\t}\n\t\thandleResize();\n\n\t}\n''', '''\t\tif(visible) {\n\t\t\tdrawGameScreen();\n\t\t}\n\t\thandleResize();\n\t\tlastFrameMs = (System.nanoTime() - frameStart) / 1_000_000.0;\n\n\t}\n'''),
+              ('''\t\tif (loadState == LoadState.ACTIVE) {\n\t\t\trenderView();\n\t\t}\n''', '''\t\tif (loadState == LoadState.ACTIVE) {\n\t\t\tlong renderStart = System.nanoTime();\n\t\t\trenderView();\n\t\t\tlastRenderMs = (System.nanoTime() - renderStart) / 1_000_000.0;\n\t\t}\n'''),
+              ('''\tpublic void drawGameImage() {\n\t\tgameImageBuffer.finalize();\n\t\tWritableImage finalImg = gameImageBuffer.finalImage;\n''', '''\tpublic void drawGameImage() {\n\t\tlong presentStart = System.nanoTime();\n\t\tgameImageBuffer.finalize();\n\t\tlastPresentPrepareMs = (System.nanoTime() - presentStart) / 1_000_000.0;\n\t\tWritableImage finalImg = gameImageBuffer.finalImage;\n'''),
+              ('''\tpublic int fps;\n\tpublic DisplayCanvas mapCanvas;\n''', '''\tpublic int fps;\n\tpublic double lastFrameMs;\n\tpublic double lastRenderMs;\n\tpublic double lastPresentPrepareMs;\n\tpublic DisplayCanvas mapCanvas;\n'''),
+              ('''\t\t\tk += TextRenderUtils.renderLeft(gameImageBuffer, "Fps: " + fps, c, k, i1);\n\t\t\tRuntime runtime = Runtime.getRuntime();\n''', '''\t\t\tk += TextRenderUtils.renderLeft(gameImageBuffer, "Fps: " + fps, c, k, i1);\n\t\t\tk += TextRenderUtils.renderLeft(gameImageBuffer, String.format("Frame: %.2f ms", lastFrameMs), c, k, i1);\n\t\t\tk += TextRenderUtils.renderLeft(gameImageBuffer, String.format("Render: %.2f ms", lastRenderMs), c, k, i1);\n\t\t\tk += TextRenderUtils.renderLeft(gameImageBuffer, String.format("Present prep: %.2f ms", lastPresentPrepareMs), c, k, i1);\n\t\t\tRuntime runtime = Runtime.getRuntime();\n''')
+          ]
+          for old, new in replacements:
+              if old not in text:
+                  raise SystemExit('Expected profiling target not found')
+              text = text.replace(old, new, 1)
+          path.write_text(text)
+          PY
+      - name: Remove one-shot workflow and commit
+        run: |
+          rm .github/workflows/apply-profiled-render-path.yml
+          git config user.name 'Johto-Foundry'
+          git config user.email '314530853+Johto-Foundry@users.noreply.github.com'
+          git add -A
+          git commit -m 'Add profiling to combined render-path test'
+          git push origin HEAD:performance-profiled-render-path
