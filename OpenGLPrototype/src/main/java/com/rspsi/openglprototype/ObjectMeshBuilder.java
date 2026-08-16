@@ -1,6 +1,7 @@
 package com.rspsi.openglprototype;
 
 import com.jagex.Client;
+import com.jagex.cache.loader.textures.TextureLoader;
 import com.jagex.draw.raster.GameRasterizer;
 import com.jagex.entity.Renderable;
 import com.jagex.entity.model.Mesh;
@@ -13,7 +14,9 @@ import com.jagex.map.tile.SceneTile;
 import java.lang.reflect.Field;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.IdentityHashMap;
+import java.util.Map;
 import java.util.Set;
 
 /** Converts RSPSi's already-resolved scene models into GPU triangles. */
@@ -68,7 +71,10 @@ public final class ObjectMeshBuilder {
         System.out.println("[OPENGL-OBJECTS] objects="+stats.objects+" meshes="+stats.meshes+" faces="+stats.faces
                 +" texturedFaces="+stats.texturedFaces+" mappedFaces="+stats.mappedFaces
                 +" flatFaces="+stats.flatFaces+" flatTexturedFaces="+stats.flatTexturedFaces
-                +" alphaSkipped="+stats.alphaSkipped+" triangles="+(indices.size/3));
+                +" missingTextureFaces="+stats.missingTextureFaces+" alphaSkipped="+stats.alphaSkipped
+                +" triangles="+(indices.size/3));
+        if (!stats.missingTextureIds.isEmpty()) System.out.println("[OPENGL-OBJECTS] Missing texture fallbacks: "+stats.missingTextureIds);
+        if (!stats.unmappedByObject.isEmpty()) System.out.println("[OPENGL-OBJECTS] Unmapped textured faces by object (first seen IDs): "+stats.unmappedByObject);
         return new TerrainMeshSnapshot(positions.toArray(),colours.toArray(),uvs.toArray(),textureIds.toArray(),indices.toArray());
     }
 
@@ -78,8 +84,8 @@ public final class ObjectMeshBuilder {
         int orientation = orientationFor(object);
         int worldX = object instanceof GameObject ? ((GameObject)object).centreX : object.getX();
         int worldZ = object instanceof GameObject ? ((GameObject)object).centreY : object.getY();
-        appendRenderable(object.getPrimary(),worldX,worldZ,object.getRenderHeight(),orientation,p,c,uv,tex,idx,stats);
-        appendRenderable(object.getSecondary(),worldX,worldZ,object.getRenderHeight(),orientation,p,c,uv,tex,idx,stats);
+        appendRenderable(object.getPrimary(),object.getId(),worldX,worldZ,object.getRenderHeight(),orientation,p,c,uv,tex,idx,stats);
+        appendRenderable(object.getSecondary(),object.getId(),worldX,worldZ,object.getRenderHeight(),orientation,p,c,uv,tex,idx,stats);
     }
 
     private static int orientationFor(DefaultWorldObject object) {
@@ -94,7 +100,7 @@ public final class ObjectMeshBuilder {
         try { return r.model(); } catch (RuntimeException ex) { return null; }
     }
 
-    private static void appendRenderable(Renderable renderable,int worldX,int worldZ,int renderHeight,int orientation,
+    private static void appendRenderable(Renderable renderable,int objectId,int worldX,int worldZ,int renderHeight,int orientation,
                                          FloatCollector p,FloatCollector col,FloatCollector uv,FloatCollector tex,
                                          IntCollector ind,Stats stats) {
         Mesh m=resolveMesh(renderable);
@@ -113,10 +119,16 @@ public final class ObjectMeshBuilder {
             int a=m.faceIndicesA[face],b=m.faceIndicesB[face],c=m.faceIndicesC[face];
             if(!valid(a,vc)||!valid(b,vc)||!valid(c,vc))continue;
 
-            int textureId=(m.faceTextures!=null&&face<m.faceTextures.length)?m.faceTextures[face]:-1;
-            int type = m.faceTypes == null ? (textureId >= 0 ? 2 : 0) : (m.faceTypes[face] & 3);
-            boolean textured=(type==2||type==3) && textureId>=0;
+            int requestedTextureId=(m.faceTextures!=null&&face<m.faceTextures.length)?m.faceTextures[face]:-1;
+            int type = m.faceTypes == null ? (requestedTextureId >= 0 ? 2 : 0) : (m.faceTypes[face] & 3);
+            boolean wantsTexture=(type==2||type==3) && requestedTextureId>=0;
+            boolean textureAvailable=wantsTexture && TextureLoader.instance!=null && requestedTextureId<TextureLoader.instance.count() && TextureLoader.getTexture(requestedTextureId)!=null;
+            boolean textured=wantsTexture && textureAvailable;
             boolean flat=(type==1||type==3);
+            if(wantsTexture&&!textureAvailable){
+                stats.missingTextureFaces++;
+                stats.missingTextureIds.merge(requestedTextureId,1,Integer::sum);
+            }
             if(textured)stats.texturedFaces++;
             if(flat)stats.flatFaces++;
             if(type==3)stats.flatTexturedFaces++;
@@ -124,12 +136,19 @@ public final class ObjectMeshBuilder {
 
             float[][] faceUv = textured ? mappedUvs(m,face,a,b,c,vc) : null;
             if(faceUv!=null)stats.mappedFaces++;
+            else if(textured){
+                // RSPSi falls back to the face's own A/B/C vertices as the texture
+                // mapping triangle when no explicit texture-coordinate index exists.
+                faceUv=new float[][]{basisUv(m,a,b,c,a),basisUv(m,a,b,c,b),basisUv(m,a,b,c,c)};
+                if(stats.unmappedByObject.size()<16||stats.unmappedByObject.containsKey(objectId))
+                    stats.unmappedByObject.merge(objectId,1,Integer::sum);
+            }
             if(faceUv==null)faceUv=new float[][]{{0,0},{1,0},{0,1}};
 
             int rgbA=faceColour(m,face,0,textured,flat);
             int rgbB=faceColour(m,face,1,textured,flat);
             int rgbC=faceColour(m,face,2,textured,flat);
-            float gpuTextureId=textured ? MODEL_TEXTURE_MARKER+textureId : -1.0f;
+            float gpuTextureId=textured ? MODEL_TEXTURE_MARKER+requestedTextureId : -1.0f;
 
             int base=p.size/3;
             appendVertex(m,a,worldX,worldZ,renderHeight,sin,cos,rgbA,gpuTextureId,faceUv[0],p,col,uv,tex);
@@ -195,7 +214,11 @@ public final class ObjectMeshBuilder {
 
     private static boolean valid(int i,int n){return i>=0&&i<n;}
     private static TerrainMeshSnapshot empty(){return new TerrainMeshSnapshot(new float[0],new float[0],new float[0],new float[0],new int[0]);}
-    private static final class Stats{int objects,meshes,faces,texturedFaces,mappedFaces,flatFaces,flatTexturedFaces,alphaSkipped;}
+    private static final class Stats{
+        int objects,meshes,faces,texturedFaces,mappedFaces,flatFaces,flatTexturedFaces,missingTextureFaces,alphaSkipped;
+        final Map<Integer,Integer> missingTextureIds=new HashMap<>();
+        final Map<Integer,Integer> unmappedByObject=new HashMap<>();
+    }
     private static final class FloatCollector{private float[]data;private int size;FloatCollector(int cap){data=new float[Math.max(32,cap)];}void add(float v){if(size==data.length)data=Arrays.copyOf(data,data.length*2);data[size++]=v;}float[]toArray(){return Arrays.copyOf(data,size);}}
     private static final class IntCollector{private int[]data;private int size;IntCollector(int cap){data=new int[Math.max(32,cap)];}void add(int v){if(size==data.length)data=Arrays.copyOf(data,data.length*2);data[size++]=v;}int[]toArray(){return Arrays.copyOf(data,size);}}
 }
