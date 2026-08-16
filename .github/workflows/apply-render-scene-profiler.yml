@@ -1,0 +1,91 @@
+name: Apply renderScene profiler
+
+on:
+  push:
+    branches:
+      - performance-render-scene-profiler
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: performance-render-scene-profiler
+      - name: Add internal renderScene timings
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('Client/src/main/java/com/jagex/map/SceneGraph.java')
+          text = path.read_text()
+
+          field = '\tstatic int currentRenderCycle;'
+          if field not in text:
+              raise SystemExit('Could not find currentRenderCycle field')
+          text = text.replace(field, field + '\n\tprivate long lastSceneProfileLog = 0L;', 1)
+
+          sig = '\tpublic void renderScene(int cameraTileX, int cameraTileY, int k, int cameraTileZ, int cameraPlane, int j1) {'
+          start = text.find(sig)
+          if start < 0:
+              raise SystemExit('Could not find renderScene')
+
+          brace = text.find('{', start)
+          depth = 0
+          end = None
+          for i in range(brace, len(text)):
+              if text[i] == '{':
+                  depth += 1
+              elif text[i] == '}':
+                  depth -= 1
+                  if depth == 0:
+                      end = i
+                      break
+          if end is None:
+              raise SystemExit('Could not find renderScene end')
+
+          method = text[start:end+1]
+
+          insert = sig + '''\n\t\tlong sceneProfileStart = System.nanoTime();\n\t\tlong sceneProfileTileNs = 0L;\n\t\tlong sceneProfileAfterNs = 0L;\n\t\tlong sceneProfileOcclusionNs = 0L;'''
+          method = method.replace(sig, insert, 1)
+
+          occlusion = '\t\tmethod319();'
+          if occlusion not in method:
+              raise SystemExit('Could not find method319 in renderScene')
+          method = method.replace(occlusion,
+              '\t\tlong sceneProfileStage = System.nanoTime();\n' + occlusion + '\n\t\tsceneProfileOcclusionNs += System.nanoTime() - sceneProfileStage;', 1)
+
+          tile_call = '\t\t\t\t\t\t\t\t\trenderTile(tile, flag);'
+          tile_count = method.count(tile_call)
+          if tile_count == 0:
+              raise SystemExit('Could not find renderTile calls')
+          method = method.replace(tile_call,
+              '\t\t\t\t\t\t\t\t\tlong sceneTileStart = System.nanoTime();\n' + tile_call + '\n\t\t\t\t\t\t\t\t\tsceneProfileTileNs += System.nanoTime() - sceneTileStart;')
+
+          after_call = '\t\t\t\t\t\t\trenderAfterCycle(tile);'
+          after_count = method.count(after_call)
+          if after_count == 0:
+              raise SystemExit('Could not find renderAfterCycle calls')
+          method = method.replace(after_call,
+              '\t\t\t\t\t\t\tlong sceneAfterStart = System.nanoTime();\n' + after_call + '\n\t\t\t\t\t\t\tsceneProfileAfterNs += System.nanoTime() - sceneAfterStart;')
+
+          log_block = '''\n\t\tlong sceneProfileTotalNs = System.nanoTime() - sceneProfileStart;\n\t\tlong sceneProfileNow = System.currentTimeMillis();\n\t\tif (sceneProfileNow - lastSceneProfileLog >= 1000L) {\n\t\t\tlastSceneProfileLog = sceneProfileNow;\n\t\t\tdouble totalMs = sceneProfileTotalNs / 1_000_000.0;\n\t\t\tdouble tileMs = sceneProfileTileNs / 1_000_000.0;\n\t\t\tdouble afterMs = sceneProfileAfterNs / 1_000_000.0;\n\t\t\tdouble occlusionMs = sceneProfileOcclusionNs / 1_000_000.0;\n\t\t\tdouble otherMs = totalMs - tileMs - afterMs - occlusionMs;\n\t\t\tSystem.out.printf("[SCENE] chunk=(%d,%d) total=%.2f ms | tileRender=%.2f | afterCycle=%.2f | occlusion=%.2f | other=%.2f%n",\n\t\t\t\tchunk.offsetX / 64, chunk.offsetY / 64, totalMs, tileMs, afterMs, occlusionMs, otherMs);\n\t\t}\n'''
+          method = method[:-1] + log_block + '\t}'
+
+          text = text[:start] + method + text[end+1:]
+          path.write_text(text)
+
+          print(f'Instrumented {tile_count} renderTile calls and {after_count} renderAfterCycle calls')
+      - name: Remove one-shot workflow
+        run: rm .github/workflows/apply-render-scene-profiler.yml
+      - name: Commit profiler
+        run: |
+          git config user.name "Johto-Foundry"
+          git config user.email "314530853+Johto-Foundry@users.noreply.github.com"
+          git add Client/src/main/java/com/jagex/map/SceneGraph.java .github/workflows/apply-render-scene-profiler.yml
+          git commit -m "Add internal renderScene performance timings"
+          git push origin performance-render-scene-profiler
