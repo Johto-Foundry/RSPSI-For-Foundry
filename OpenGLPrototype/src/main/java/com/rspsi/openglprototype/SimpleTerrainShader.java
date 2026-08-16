@@ -9,7 +9,7 @@ public final class SimpleTerrainShader {
             "#version 330 core\n" +
             "layout(location=0) in vec3 aPosition; layout(location=1) in vec3 aColour; layout(location=2) in vec2 aTexCoord; layout(location=3) in float aTextureId;\n" +
             "uniform mat4 uViewProjection; out vec3 vColour; out vec2 vTexCoord; flat out int vTextureId;\n" +
-            "void main(){vColour=aColour;vTexCoord=aTexCoord;vTextureId=int(aTextureId+0.5);gl_Position=uViewProjection*vec4(aPosition,1.0);}\n";
+            "void main(){vColour=aColour;vTexCoord=aTexCoord;vTextureId=(aTextureId<0.0)?-1:int(aTextureId+0.5);gl_Position=uViewProjection*vec4(aPosition,1.0);}\n";
     private static final String FRAGMENT =
             "#version 330 core\n" +
             "in vec3 vColour; in vec2 vTexCoord; flat in int vTextureId; uniform sampler2DArray uTextures; uniform int uTextureCount; out vec4 fragColor;\n" +
