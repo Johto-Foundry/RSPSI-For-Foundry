@@ -19,6 +19,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map.Entry;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 
@@ -207,6 +208,7 @@ public final class Client implements Runnable {
 	private volatile boolean aBoolean831;
 	private volatile boolean aBoolean962;
 	public ImageGraphicsBuffer gameImageBuffer;
+	private final AtomicBoolean framePresentScheduled = new AtomicBoolean(false);
 	private int anInt1014;
 	private int anInt1015;
 	private int anInt1131;
@@ -1189,9 +1191,15 @@ public final class Client implements Runnable {
 		gameImageBuffer.finalize();
 		lastPresentPrepareMs = (System.nanoTime() - presentStart) / 1_000_000.0;
 		WritableImage finalImg = gameImageBuffer.finalImage;
-		Platform.runLater(() -> {
-			drawImage(finalImg);
-		});
+		if (framePresentScheduled.compareAndSet(false, true)) {
+			Platform.runLater(() -> {
+				try {
+					drawImage(finalImg);
+				} finally {
+					framePresentScheduled.set(false);
+				}
+			});
+		}
 	}
 	
 	public void drawImage(WritableImage finalImg) {
