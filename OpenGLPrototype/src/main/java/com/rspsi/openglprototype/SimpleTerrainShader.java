@@ -1,14 +1,16 @@
 package com.rspsi.openglprototype;
 
 import com.jogamp.opengl.GL3;
+import org.joml.Matrix4f;
 
 /** Minimal shader used to prove the Foundry OpenGL draw pipeline before RuneLite shaders are transplanted. */
 public final class SimpleTerrainShader {
     private static final String VERTEX =
             "#version 330 core\n" +
             "layout(location = 0) in vec3 aPosition;\n" +
+            "uniform mat4 uViewProjection;\n" +
             "void main() {\n" +
-            "    gl_Position = vec4(aPosition, 1.0);\n" +
+            "    gl_Position = uViewProjection * vec4(aPosition, 1.0);\n" +
             "}\n";
 
     private static final String FRAGMENT =
@@ -19,6 +21,7 @@ public final class SimpleTerrainShader {
             "}\n";
 
     private int program;
+    private int viewProjectionLocation = -1;
 
     public void init(GL3 gl) {
         int vertex = compile(gl, GL3.GL_VERTEX_SHADER, VERTEX);
@@ -38,6 +41,7 @@ public final class SimpleTerrainShader {
             throw new IllegalStateException("OpenGL program link failed: " + new String(log));
         }
 
+        viewProjectionLocation = gl.glGetUniformLocation(program, "uViewProjection");
         gl.glDetachShader(program, vertex);
         gl.glDetachShader(program, fragment);
         gl.glDeleteShader(vertex);
@@ -67,10 +71,20 @@ public final class SimpleTerrainShader {
         gl.glUseProgram(program);
     }
 
+    public void setViewProjection(GL3 gl, Matrix4f matrix) {
+        if (viewProjectionLocation < 0) {
+            return;
+        }
+        float[] values = new float[16];
+        matrix.get(values);
+        gl.glUniformMatrix4fv(viewProjectionLocation, 1, false, values, 0);
+    }
+
     public void dispose(GL3 gl) {
         if (program != 0) {
             gl.glDeleteProgram(program);
             program = 0;
+            viewProjectionLocation = -1;
         }
     }
 }
