@@ -210,6 +210,7 @@ public final class Client implements Runnable {
 	public ImageGraphicsBuffer gameImageBuffer;
 	private final AtomicBoolean framePresentScheduled = new AtomicBoolean(false);
 	private long lastPerfConsoleLog = 0L;
+	private long lastRenderBreakdownLog = 0L;
 	private int anInt1014;
 	private int anInt1015;
 	private int anInt1131;
@@ -1110,83 +1111,87 @@ public final class Client implements Runnable {
 	}
 
 	public final void renderView() {
+		long renderViewStart = System.nanoTime();
+
+		long stageStart = System.nanoTime();
 		for (Chunk chunk : chunks) {
 			chunk.processAnimableObjects();
 		}
+		double animablesMs = (System.nanoTime() - stageStart) / 1_000_000.0;
 
-			int i = cameraRoll;
-			/*
-			 * if (anInt984 / 256 > i) { i = anInt984 / 256; }
-			 */
-			/*if (aBooleanArray876[4] && anIntArray1203[4] > i) {
-				i = anIntArray1203[4];
-			}*/
-			int k = cameraYaw + anInt896 & 0x7ff;
-			method144(600 + i * 3, i, k);
-		
-
+		stageStart = System.nanoTime();
+		int i = cameraRoll;
+		int k = cameraYaw + anInt896 & 0x7ff;
+		method144(600 + i * 3, i, k);
 		int currentPlane = method120();
-	
-
-/*		int l = xCameraPos;
-		int i1 = zCameraPos;
-		int j1 = yCameraPos;
-		int k1 = yCameraCurve;
-		int l1 = xCameraCurve;*/
-
-			Mesh.aBoolean1684 = true;
-			Mesh.mouseX = mouseEventX;
-			Mesh.mouseY = mouseEventY;
-			gameImageBuffer.initializeRasterizer();
-			GameRasterizer.getInstance().reset();
-			if (cameraMoved) {
-				if (Options.showCamera.get()) {
-					SceneGraph.minimapUpdate = true;
-				}
-				Chunk current = this.getCurrentChunk();
-				if (current != this.lastChunk) {
-					lastChunk = current;
-					SceneGraph.minimapUpdate = true;
-				}
-				cameraMoved = false;
+		Mesh.aBoolean1684 = true;
+		Mesh.mouseX = mouseEventX;
+		Mesh.mouseY = mouseEventY;
+		gameImageBuffer.initializeRasterizer();
+		GameRasterizer.getInstance().reset();
+		if (cameraMoved) {
+			if (Options.showCamera.get()) {
+				SceneGraph.minimapUpdate = true;
 			}
+			Chunk current = this.getCurrentChunk();
+			if (current != this.lastChunk) {
+				lastChunk = current;
+				SceneGraph.minimapUpdate = true;
+			}
+			cameraMoved = false;
+		}
 		Mesh.resourceCount = 0;
-			for (Chunk chunk : chunks) {
-				try {
-					sceneGraph.setChunk(chunk);
-					sceneGraph.renderScene(xCameraPos, yCameraPos, xCameraCurve, zCameraPos, currentPlane, yCameraCurve);
-					// xCameraPos, yCameraPos, xCameraCurve, zCameraPos, j, yCameraCurve
+		double setupMs = (System.nanoTime() - stageStart) / 1_000_000.0;
 
-				} catch (Exception ex) {
-					ex.printStackTrace();
-				}
-				// break;
+		stageStart = System.nanoTime();
+		for (Chunk chunk : chunks) {
+			try {
+				sceneGraph.setChunk(chunk);
+				sceneGraph.renderScene(xCameraPos, yCameraPos, xCameraCurve, zCameraPos, currentPlane, yCameraCurve);
+			} catch (Exception ex) {
+				ex.printStackTrace();
 			}
-		if(Mesh.resourceCount > 0)
+		}
+		double chunksMs = (System.nanoTime() - stageStart) / 1_000_000.0;
+
+		stageStart = System.nanoTime();
+		if (Mesh.resourceCount > 0)
 			hoveredUID = Mesh.resourceIDTag[Mesh.resourceCount - 1];
 		else
 			hoveredUID = null;
-		
 		for (Runnable r : Lists.newArrayList(SceneGraph.onCycleEnd)) {
-			if(r != null) {
+			if (r != null) {
 				try {
 					r.run();
-				} catch(Exception ex) {
+				} catch (Exception ex) {
 					ex.printStackTrace();
 				}
 			}
 			SceneGraph.onCycleEnd.remove(r);
 		}
+		double cycleEndMs = (System.nanoTime() - stageStart) / 1_000_000.0;
+
+		stageStart = System.nanoTime();
 		sceneGraph.cleanUpShortLivedObjects();
+		double cleanupMs = (System.nanoTime() - stageStart) / 1_000_000.0;
+
+		stageStart = System.nanoTime();
 		drawDebugOverlay();
+		double debugMs = (System.nanoTime() - stageStart) / 1_000_000.0;
+
+		stageStart = System.nanoTime();
 		gameImageBuffer.finalize();
-	/*	xCameraPos = l;
-		zCameraPos = i1;
-		yCameraPos = j1;
-		yCameraCurve = k1;
-		xCameraCurve = l1;*/
+		double finalizeMs = (System.nanoTime() - stageStart) / 1_000_000.0;
+
+		double totalMs = (System.nanoTime() - renderViewStart) / 1_000_000.0;
+		long now = System.currentTimeMillis();
+		if (now - lastRenderBreakdownLog >= 1000L) {
+			lastRenderBreakdownLog = now;
+			System.out.printf("[RENDER] total=%.2f ms | anim=%.2f | setup=%.2f | chunks=%.2f | cycle=%.2f | cleanup=%.2f | debug=%.2f | finalize=%.2f | loadedChunks=%d%n",
+				totalMs, animablesMs, setupMs, chunksMs, cycleEndMs, cleanupMs, debugMs, finalizeMs, chunks.size());
+		}
 	}
-	
+
 	public void drawGameImage() {
 		long presentStart = System.nanoTime();
 		gameImageBuffer.finalize();
