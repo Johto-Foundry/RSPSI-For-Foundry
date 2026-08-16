@@ -47,8 +47,6 @@ public final class TerrainTextureArray {
             uploaded++;
         }
 
-        // Mipmaps greatly reduce the harsh shimmering/brick-face aliasing that
-        // appeared when a 128x128 cache texture was minified on distant models.
         gl.glGenerateMipmap(GL3.GL_TEXTURE_2D_ARRAY);
         gl.glBindTexture(GL3.GL_TEXTURE_2D_ARRAY, 0);
         System.out.println("[OPENGL-TEXTURES] GPU texture array ready: " + uploaded + "/" + layerCount
@@ -65,30 +63,15 @@ public final class TerrainTextureArray {
             opaque[i] = value != 0 && value != 0xff00ff;
         }
 
-        /*
-         * Linear filtering blends RGB even across fully transparent texels. If
-         * those texels contain black (as RS cache cut-outs normally do), their
-         * black RGB leaks into the visible edge and creates the dark halo seen
-         * around foliage/cobwebs. Keep alpha zero, but bleed neighbouring opaque
-         * RGB into transparent texels so filtered cut-out edges retain the leaf/
-         * web colour instead of interpolating toward black.
-         */
+        // Fill RGB beneath transparent cut-out texels from nearby opaque texels.
+        // Alpha remains zero. This prevents GL_LINEAR from interpolating visible
+        // foliage/cobweb edges toward transparent black and creating dark halos.
         int[] bled = rgb.clone();
         boolean[] known = opaque.clone();
         for (int pass = 0; pass < 4; pass++) {
             int[] next = bled.clone();
             boolean[] nextKnown = known.clone();
             boolean changed = false;
-            for (int y = 0; y < LAYER_SIZE; y++) {
-                for (int x = 0; x < LAYER_SIZE; x++) {
-                    int i = y * LAYER_SIZE + x;
-                    if (known[i]) continue;
-                    long rr = 0, gg = 0, bb = 0;
-                    int count = 0;
-                    if (x > 0) count = addNeighbour(i - 1, known, bled, countHolder, rgbHolder); // placeholder
-                }
-            }
-            // Manual neighbour pass below; kept separate for clarity and no allocations per texel.
             for (int y = 0; y < LAYER_SIZE; y++) {
                 for (int x = 0; x < LAYER_SIZE; x++) {
                     int i = y * LAYER_SIZE + x;
