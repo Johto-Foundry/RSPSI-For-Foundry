@@ -23,11 +23,6 @@ import java.util.List;
  * Experimental live GPU view of the terrain already loaded by the working
  * RSPSi editor. Editing and saving remain owned by the existing editor while
  * this renderer progressively replaces the software viewport.
- *
- * The default camera mirrors the live RSPSi camera so the GPU window behaves
- * like the existing editor rather than a whole-map inspection view. Holding
- * the right mouse button in this preview temporarily switches to the original
- * orbit camera, which is kept as a useful debugging fallback.
  */
 public final class LiveTerrainPreview implements GLEventListener {
     private final Client client;
@@ -135,12 +130,6 @@ public final class LiveTerrainPreview implements GLEventListener {
         GL3 gl = drawable.getGL().getGL3();
         gl.setSwapInterval(0);
         gl.glEnable(GL.GL_DEPTH_TEST);
-
-        // RSPSi's shaped-tile triangle order is not guaranteed to share one GL
-        // winding convention after the Jagex -> OpenGL axis conversion. Render
-        // terrain double-sided for now so a valid face can never become a black
-        // hole simply because GL_BACK culling rejected it. Once every terrain
-        // path has a canonical winding we can safely re-enable face culling.
         gl.glDisable(GL.GL_CULL_FACE);
 
         System.out.println("[OPENGL-LIVE] Renderer: " + gl.glGetString(GL.GL_RENDERER));
@@ -191,7 +180,7 @@ public final class LiveTerrainPreview implements GLEventListener {
         }
 
         System.out.println("[OPENGL-LIVE] GPU terrain chunks uploaded: " + uploaded + " | plane=" + plane);
-        System.out.println("[OPENGL-LIVE] Camera now mirrors RSPSi axes directly. Move/rotate the normal editor camera to compare views.");
+        System.out.println("[OPENGL-LIVE] Camera follows RSPSi with horizontal mirror correction and stable snapshots.");
         System.out.println("[OPENGL-LIVE] Hold right mouse in this window for temporary whole-map orbit mode.");
     }
 
@@ -202,10 +191,12 @@ public final class LiveTerrainPreview implements GLEventListener {
         gl.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT);
 
         float aspect = viewportHeight <= 0 ? 1.0f : (float) viewportWidth / (float) viewportHeight;
+        CameraSnapshot camera = null;
         if (orbitOverride) {
             buildOrbitCamera(aspect);
         } else {
-            buildRspsiCamera(aspect);
+            camera = readStableCamera();
+            buildRspsiCamera(aspect, camera);
         }
 
         shader.use(gl);
@@ -217,54 +208,79 @@ public final class LiveTerrainPreview implements GLEventListener {
         frames++;
         long now = System.nanoTime();
         if (now - lastFpsNanos >= 1_000_000_000L) {
+            String pos = camera == null
+                    ? (client.xCameraPos / 128) + "," + (client.yCameraPos / 128) + "," + client.zCameraPos
+                    : (camera.x / 128) + "," + (camera.z / 128) + "," + camera.height;
             System.out.println("[OPENGL-LIVE] FPS: " + frames
                     + " | terrainChunks=" + terrain.size()
                     + " | camera=" + (orbitOverride ? "orbit" : "rspsi")
-                    + " | pos=" + (client.xCameraPos / 128) + "," + (client.yCameraPos / 128) + "," + client.zCameraPos);
+                    + " | pos=" + pos);
             frames = 0;
             lastFpsNanos = now;
         }
     }
 
     /**
-     * Match the legacy SceneGraph camera basis rather than approximating it as a
-     * conventional yaw around +Z.  SceneGraph transforms horizontal coordinates
-     * as:
-     *   screenX = dx*sin(yaw) + dz*cos(yaw)
-     *   forward = dx*cos(yaw) - dz*sin(yaw)
-     * so yaw zero looks along +world-X, not +world-Z.  The previous approximation
-     * was therefore effectively rotated/reflected relative to the editor.
-     *
-     * A camera-local up vector is supplied explicitly.  This stays orthogonal to
-     * the forward vector even at the editor's extreme pitch, avoiding lookAt's
-     * instability when a fixed world-up vector becomes nearly parallel to view.
+     * The editor updates camera position and curves as separate integer fields.
+     * At ~1500+ GPU FPS we can otherwise catch the camera halfway through one
+     * editor update, which presents as a one-frame jump/bounce at extreme pitch.
+     * Read the complete state twice and only accept a matching pair.
      */
-    private void buildRspsiCamera(float aspect) {
-        float eyeX = client.xCameraPos;
-        float eyeY = -client.zCameraPos;
-        float eyeZ = client.yCameraPos;
+    private CameraSnapshot readStableCamera() {
+        CameraSnapshot last = captureCamera();
+        for (int attempt = 0; attempt < 4; attempt++) {
+            CameraSnapshot next = captureCamera();
+            if (last.sameAs(next)) {
+                return next;
+            }
+            last = next;
+        }
+        return last;
+    }
 
-        float yaw = (float) (client.xCameraCurve * (Math.PI * 2.0 / 2048.0));
-        float pitch = (float) (client.yCameraCurve * (Math.PI * 2.0 / 2048.0));
+    private CameraSnapshot captureCamera() {
+        return new CameraSnapshot(
+                client.xCameraPos,
+                client.yCameraPos,
+                client.zCameraPos,
+                client.xCameraCurve & 0x7ff,
+                client.yCameraCurve & 0x7ff);
+    }
+
+    /**
+     * Use the camera direction that visually matched RSPSi before the attempted
+     * axis rewrite. The remaining mismatch was a screen-space mirror (like a
+     * front-facing phone camera), not a 180-degree viewing-direction error.
+     * Therefore the projection is flipped only on X instead of rotating yaw.
+     */
+    private void buildRspsiCamera(float aspect, CameraSnapshot camera) {
+        float eyeX = camera.x;
+        float eyeY = -camera.height;
+        float eyeZ = camera.z;
+
+        float yaw = (float) (camera.yaw * (Math.PI * 2.0 / 2048.0));
+        float pitch = (float) (camera.pitch * (Math.PI * 2.0 / 2048.0));
         float sinYaw = (float) Math.sin(yaw);
         float cosYaw = (float) Math.cos(yaw);
         float sinPitch = (float) Math.sin(pitch);
         float cosPitch = (float) Math.cos(pitch);
 
-        // Legacy RSPSi/Jagex camera forward direction, expressed in the OpenGL
-        // mesh coordinate system (X=world X, Y=-world height, Z=world Y).
-        float dirX = cosYaw * cosPitch;
+        // Original mapping that tracked the correct part of the RSPSi scene.
+        float dirX = -sinYaw * cosPitch;
         float dirY = -sinPitch;
-        float dirZ = -sinYaw * cosPitch;
+        float dirZ = cosYaw * cosPitch;
 
-        // Camera-local up derived from the same yaw/pitch basis.  Unlike fixed
-        // (0,1,0), this cannot become parallel to dir at maximum pitch.
-        float upX = cosYaw * sinPitch;
+        // Camera-local up vector for this same basis, always orthogonal to dir.
+        float upX = -sinYaw * sinPitch;
         float upY = cosPitch;
-        float upZ = -sinYaw * sinPitch;
+        float upZ = cosYaw * sinPitch;
 
         viewProjection.identity()
                 .perspective((float) Math.toRadians(55.0), aspect, 16.0f, 150000.0f)
+                // RSPSi's software viewport and the GL camera basis differ by a
+                // horizontal screen reflection. Correct that reflection directly;
+                // do not turn the camera around by 180 degrees.
+                .scale(-1.0f, 1.0f, 1.0f)
                 .lookAt(eyeX, eyeY, eyeZ,
                         eyeX + dirX * 1024.0f,
                         eyeY + dirY * 1024.0f,
@@ -303,5 +319,30 @@ public final class LiveTerrainPreview implements GLEventListener {
         }
         terrain.clear();
         shader.dispose(gl);
+    }
+
+    private static final class CameraSnapshot {
+        final int x;
+        final int z;
+        final int height;
+        final int yaw;
+        final int pitch;
+
+        CameraSnapshot(int x, int z, int height, int yaw, int pitch) {
+            this.x = x;
+            this.z = z;
+            this.height = height;
+            this.yaw = yaw;
+            this.pitch = pitch;
+        }
+
+        boolean sameAs(CameraSnapshot other) {
+            return other != null
+                    && x == other.x
+                    && z == other.z
+                    && height == other.height
+                    && yaw == other.yaw
+                    && pitch == other.pitch;
+        }
     }
 }
