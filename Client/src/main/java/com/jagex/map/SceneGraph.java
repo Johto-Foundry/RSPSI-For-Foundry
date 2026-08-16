@@ -115,6 +115,7 @@ public class SceneGraph {
 	static int anInt446;
 	static int currentCameraPlane;
 	static int currentRenderCycle;
+	private long lastSceneProfileLog = 0L;
 	static int clickX;
 	static int clickY;
 	static int[][] tileShapeConfig = {new int[16], {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1},
@@ -2576,6 +2577,10 @@ public class SceneGraph {
 	}
 
 	public void renderScene(int cameraTileX, int cameraTileY, int k, int cameraTileZ, int cameraPlane, int j1) {
+		long sceneProfileStart = System.nanoTime();
+		long sceneProfileTileNs = 0L;
+		long sceneProfileAfterNs = 0L;
+		long sceneProfileOcclusionNs = 0L;
 		if (!sceneVisible(cameraTileX, cameraTileY))
 			return;
 		xCameraTile = cameraTileX;
@@ -2633,7 +2638,9 @@ public class SceneGraph {
 		 * (maxViewY > 64) { maxViewY = 64; }
 		 */
 
+		long sceneProfileStage = System.nanoTime();
 		method319();
+		sceneProfileOcclusionNs += System.nanoTime() - sceneProfileStage;
 		anInt446 = 0;
 
 		for (int z = activePlane; z < planeCount; z++) {
@@ -2676,28 +2683,36 @@ public class SceneGraph {
 							if (inChunk(tileXNeg, tileYNeg)) {
 								SceneTile tile = tiles[toChunkTileX(tileXNeg)][toChunkTileY(tileYNeg)];
 								if (tile != null && tile.needsRendering) {
+									long sceneTileStart = System.nanoTime();
 									renderTile(tile, flag);
+									sceneProfileTileNs += System.nanoTime() - sceneTileStart;
 								}
 							}
 
 							if (inChunk(tileXNeg, tileYPos)) {
 								SceneTile tile = tiles[toChunkTileX(tileXNeg)][toChunkTileY(tileYPos)];
 								if (tile != null && tile.needsRendering) {
+									long sceneTileStart = System.nanoTime();
 									renderTile(tile, flag);
+									sceneProfileTileNs += System.nanoTime() - sceneTileStart;
 								}
 							}
 
 							if (inChunk(tileXPos, tileYNeg)) {
 								SceneTile tile = tiles[toChunkTileX(tileXPos)][toChunkTileY(tileYNeg)];
 								if (tile != null && tile.needsRendering) {
+									long sceneTileStart = System.nanoTime();
 									renderTile(tile, flag);
+									sceneProfileTileNs += System.nanoTime() - sceneTileStart;
 								}
 							}
 
 							if (inChunk(tileXPos, tileYPos)) {
 								SceneTile tile = tiles[toChunkTileX(tileXPos)][toChunkTileY(tileYPos)];
 								if (tile != null && tile.needsRendering) {
+									long sceneTileStart = System.nanoTime();
 									renderTile(tile, flag);
+									sceneProfileTileNs += System.nanoTime() - sceneTileStart;
 								}
 							}
 
@@ -2725,28 +2740,36 @@ public class SceneGraph {
 					if (inChunk(tileXNeg, tileYNeg)) {
 						SceneTile tile = tiles[toChunkTileX(tileXNeg)][toChunkTileY(tileYNeg)];
 						if (tile != null) {
+							long sceneAfterStart = System.nanoTime();
 							renderAfterCycle(tile);
+							sceneProfileAfterNs += System.nanoTime() - sceneAfterStart;
 						}
 					}
 
 					if (inChunk(tileXNeg, tileYPos)) {
 						SceneTile tile = tiles[toChunkTileX(tileXNeg)][toChunkTileY(tileYPos)];
 						if (tile != null) {
+							long sceneAfterStart = System.nanoTime();
 							renderAfterCycle(tile);
+							sceneProfileAfterNs += System.nanoTime() - sceneAfterStart;
 						}
 					}
 
 					if (inChunk(tileXPos, tileYNeg)) {
 						SceneTile tile = tiles[toChunkTileX(tileXPos)][toChunkTileY(tileYNeg)];
 						if (tile != null) {
+							long sceneAfterStart = System.nanoTime();
 							renderAfterCycle(tile);
+							sceneProfileAfterNs += System.nanoTime() - sceneAfterStart;
 						}
 					}
 
 					if (inChunk(tileXPos, tileYPos)) {
 						SceneTile tile = tiles[toChunkTileX(tileXPos)][toChunkTileY(tileYPos)];
 						if (tile != null) {
+							long sceneAfterStart = System.nanoTime();
 							renderAfterCycle(tile);
+							sceneProfileAfterNs += System.nanoTime() - sceneAfterStart;
 						}
 					}
 
@@ -2757,6 +2780,19 @@ public class SceneGraph {
 			}
 		}
 		// clicked = false;
+	
+		long sceneProfileTotalNs = System.nanoTime() - sceneProfileStart;
+		long sceneProfileNow = System.currentTimeMillis();
+		if (sceneProfileNow - lastSceneProfileLog >= 1000L) {
+			lastSceneProfileLog = sceneProfileNow;
+			double totalMs = sceneProfileTotalNs / 1_000_000.0;
+			double tileMs = sceneProfileTileNs / 1_000_000.0;
+			double afterMs = sceneProfileAfterNs / 1_000_000.0;
+			double occlusionMs = sceneProfileOcclusionNs / 1_000_000.0;
+			double otherMs = totalMs - tileMs - afterMs - occlusionMs;
+			System.out.printf("[SCENE] chunk=(%d,%d) total=%.2f ms | tileRender=%.2f | afterCycle=%.2f | occlusion=%.2f | other=%.2f%n",
+				chunk.offsetX / 64, chunk.offsetY / 64, totalMs, tileMs, afterMs, occlusionMs, otherMs);
+		}
 	}
 
 	public void renderAfterCycle(SceneTile activeTile) {
