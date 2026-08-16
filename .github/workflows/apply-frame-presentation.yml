@@ -1,0 +1,58 @@
+name: Apply frame presentation optimization
+
+on:
+  push:
+    branches:
+      - performance-frame-presentation
+    paths:
+      - '.github/workflows/apply-frame-presentation.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: performance-frame-presentation
+          fetch-depth: 0
+
+      - name: Coalesce JavaFX frame presentation
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('Client/src/main/java/com/jagex/Client.java')
+          text = path.read_text()
+
+          old_import = 'import java.util.concurrent.locks.ReentrantLock;\n'
+          new_import = 'import java.util.concurrent.atomic.AtomicBoolean;\nimport java.util.concurrent.locks.ReentrantLock;\n'
+          if old_import not in text:
+              raise SystemExit('Expected ReentrantLock import not found')
+          text = text.replace(old_import, new_import, 1)
+
+          old_field = '\tpublic ImageGraphicsBuffer gameImageBuffer;\n'
+          new_field = '\tpublic ImageGraphicsBuffer gameImageBuffer;\n\tprivate final AtomicBoolean framePresentScheduled = new AtomicBoolean(false);\n'
+          if old_field not in text:
+              raise SystemExit('Expected gameImageBuffer field not found')
+          text = text.replace(old_field, new_field, 1)
+
+          old_method = '''\tpublic void drawGameImage() {\n\t\tgameImageBuffer.finalize();\n\t\tWritableImage finalImg = gameImageBuffer.finalImage;\n\t\tPlatform.runLater(() -> {\n\t\t\tdrawImage(finalImg);\n\t\t});\n\t}\n'''
+          new_method = '''\tpublic void drawGameImage() {\n\t\tgameImageBuffer.finalize();\n\t\tWritableImage finalImg = gameImageBuffer.finalImage;\n\t\tif (framePresentScheduled.compareAndSet(false, true)) {\n\t\t\tPlatform.runLater(() -> {\n\t\t\t\ttry {\n\t\t\t\t\tdrawImage(finalImg);\n\t\t\t\t} finally {\n\t\t\t\t\tframePresentScheduled.set(false);\n\t\t\t\t}\n\t\t\t});\n\t\t}\n\t}\n'''
+          if old_method not in text:
+              raise SystemExit('Expected drawGameImage method not found')
+          text = text.replace(old_method, new_method, 1)
+
+          path.write_text(text)
+          PY
+
+      - name: Remove one-shot workflow and commit
+        run: |
+          rm .github/workflows/apply-frame-presentation.yml
+          git config user.name 'Johto-Foundry'
+          git config user.email '314530853+Johto-Foundry@users.noreply.github.com'
+          git add -A
+          git commit -m 'Coalesce JavaFX frame presentation'
+          git push origin HEAD:performance-frame-presentation
