@@ -1,0 +1,10 @@
+rootProject.name = 'RSPSiSuite'
+
+include ':Client'
+include ':Editor'
+include ':Plugins'
+include ':RS-Cache-Library'
+
+include 'Plugins:OSRS317Plugin'
+include 'Plugins:OSRSPlugin'
+include 'Plugins:Plugin317'
