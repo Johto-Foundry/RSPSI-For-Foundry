@@ -391,7 +391,6 @@ public final class Client implements Runnable {
 			if(System.currentTimeMillis() - lastMinimapUpdate > 100) {
 				lastMinimapUpdate = System.currentTimeMillis();
 				this.drawMinimapFullImage();
-				System.out.println("MINIMAP");
 				Chunk chunk = this.getCurrentChunk();
 				if(chunk != null) {
 					chunk.drawMinimapScene(Options.currentHeight.get());
@@ -1246,7 +1245,6 @@ public final class Client implements Runnable {
 	public void drawMinimapFullImage() {
 		if (!fullMapVisible.get())
 			return;
-		System.out.println("RENDER FULL MAP");
 		Platform.runLater(() -> {
 			for (Chunk chunk : chunks) {
 				try {
@@ -1591,7 +1589,6 @@ public final class Client implements Runnable {
 				Client.getSingleton().mapRegion.updateTiles();
 
 				SceneGraph.minimapUpdate = true;
-				System.out.println("UPDATED TILES");
 		});
 	}
 	
