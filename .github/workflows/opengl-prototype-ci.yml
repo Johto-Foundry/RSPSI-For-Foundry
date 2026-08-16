@@ -8,6 +8,9 @@ on:
     branches:
       - main
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -22,3 +25,38 @@ jobs:
           gradle-version: '6.1'
       - name: Build standalone OpenGL pipeline
         run: gradle -PstandaloneOpenGL :OpenGLPrototype:classes --stacktrace
+      - name: Wire live preview into editor branch
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('Editor/src/main/java/com/rspsi/MainWindow.java')
+          text = path.read_text()
+          marker = 'OpenGL Terrain Preview'
+          if marker not in text:
+              old = '''\t\t\tclientInstance = Client.initialize(controller.getGamePane().widthProperty().intValue(),
+\t\t\t\t\tcontroller.getGamePane().heightProperty().intValue());
+
+\t\t\tclientInstance.loadCache(Paths.get(Config.cacheLocation.get()));'''
+              new = '''\t\t\tclientInstance = Client.initialize(controller.getGamePane().widthProperty().intValue(),
+\t\t\t\t\tcontroller.getGamePane().heightProperty().intValue());
+
+\t\t\tMenuItem openGlTerrainPreview = new MenuItem("OpenGL Terrain Preview");
+\t\t\topenGlTerrainPreview.setOnAction(evt -> com.rspsi.openglprototype.LiveTerrainPreview.open(clientInstance));
+\t\t\tcontroller.getFileMenu().getItems().add(controller.getFileMenu().getItems().size() - 2, openGlTerrainPreview);
+
+\t\t\tclientInstance.loadCache(Paths.get(Config.cacheLocation.get()));'''
+              if old not in text:
+                  raise SystemExit('Expected Client initialization block not found; refusing to patch.')
+              path.write_text(text.replace(old, new, 1))
+          PY
+          if git diff --quiet -- Editor/src/main/java/com/rspsi/MainWindow.java; then
+            echo "Live preview menu already wired."
+          else
+            git config user.name "Johto-Foundry"
+            git config user.email "314530853+Johto-Foundry@users.noreply.github.com"
+            git add Editor/src/main/java/com/rspsi/MainWindow.java
+            git commit -m "Add live OpenGL terrain preview action"
+            git push
+          fi
