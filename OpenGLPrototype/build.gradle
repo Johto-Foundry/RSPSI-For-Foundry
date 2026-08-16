@@ -8,6 +8,7 @@ sourceSets {
             if (project.hasProperty('standaloneOpenGL')) {
                 exclude 'com/rspsi/openglprototype/CurrentSceneBridge.java'
                 exclude 'com/rspsi/openglprototype/TerrainMeshBuilder.java'
+                exclude 'com/rspsi/openglprototype/LiveTerrainPreview.java'
             }
         }
     }
