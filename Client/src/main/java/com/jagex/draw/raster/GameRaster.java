@@ -1,5 +1,7 @@
 package com.jagex.draw.raster;
 
+import java.util.Arrays;
+
 public class GameRaster {
 
 	protected int maxRight;
@@ -223,10 +225,7 @@ public class GameRaster {
 	}
 
 	public void reset() {
-		int count = width * height;
-		for (int index = 0; index < count; index++) {
-			raster[index] = 0;
-		}
+		Arrays.fill(raster, 0, width * height, 0);
 	}
 
 	public void setBounds(int clipTop, int clipLeft, int clipRight, int clipBottom) {
