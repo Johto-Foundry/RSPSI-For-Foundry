@@ -18,6 +18,8 @@ import com.jogamp.opengl.util.Animator;
 public final class FoundryGLPrototype implements GLEventListener {
     private long frames;
     private long lastFpsNanos = System.nanoTime();
+    private final TerrainGpuBuffer testGeometry = new TerrainGpuBuffer();
+    private final SimpleTerrainShader shader = new SimpleTerrainShader();
 
     public static void main(String[] args) {
         GLProfile.initSingleton();
@@ -41,10 +43,23 @@ public final class FoundryGLPrototype implements GLEventListener {
         System.out.println("[OPENGL] Renderer: " + gl.glGetString(GL.GL_RENDERER));
         System.out.println("[OPENGL] Vendor: " + gl.glGetString(GL.GL_VENDOR));
         System.out.println("[OPENGL] Version: " + gl.glGetString(GL.GL_VERSION));
+
+        shader.init(gl);
+        testGeometry.upload(gl, new TerrainMeshSnapshot(
+                new float[] {
+                        -0.65f, -0.55f, 0.0f,
+                         0.65f, -0.55f, 0.0f,
+                         0.00f,  0.65f, 0.0f
+                },
+                new int[] {0, 1, 2}
+        ));
     }
 
     @Override
     public void dispose(GLAutoDrawable drawable) {
+        GL3 gl = drawable.getGL().getGL3();
+        testGeometry.dispose(gl);
+        shader.dispose(gl);
     }
 
     @Override
@@ -52,6 +67,9 @@ public final class FoundryGLPrototype implements GLEventListener {
         GL3 gl = drawable.getGL().getGL3();
         gl.glClearColor(0.055f, 0.065f, 0.08f, 1f);
         gl.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT);
+
+        shader.use(gl);
+        testGeometry.draw(gl);
 
         frames++;
         long now = System.nanoTime();
