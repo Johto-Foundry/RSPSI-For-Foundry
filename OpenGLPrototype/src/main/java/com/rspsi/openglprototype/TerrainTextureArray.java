@@ -1,15 +1,15 @@
 package com.rspsi.openglprototype;
 
 import com.jagex.cache.loader.textures.TextureLoader;
-import com.jagex.draw.textures.Texture;
 import com.jogamp.opengl.GL;
 import com.jogamp.opengl.GL3;
 
 import java.nio.ByteBuffer;
 
-/** Uploads the editor's decoded cache textures into one GPU texture array. */
+/** Uploads the exact 128x128 texture texels used by RSPSi's software rasterizer. */
 public final class TerrainTextureArray {
     private static final int LAYER_SIZE = 128;
+    private static final int TEXELS_PER_LAYER = LAYER_SIZE * LAYER_SIZE;
     private int handle;
     private int layerCount;
 
@@ -39,31 +39,32 @@ public final class TerrainTextureArray {
 
         int uploaded = 0;
         for (int textureId = 0; textureId < layerCount; textureId++) {
-            Texture texture;
-            try { texture = TextureLoader.getTexture(textureId); } catch (RuntimeException ex) { continue; }
-            if (texture == null || texture.getPixels() == null || texture.getWidth() <= 0 || texture.getHeight() <= 0) continue;
-            ByteBuffer rgba = resample(texture);
+            int[] pixels;
+            try { pixels = TextureLoader.getTexturePixels(textureId); } catch (RuntimeException ex) { continue; }
+            if (pixels == null || pixels.length < TEXELS_PER_LAYER) continue;
+            ByteBuffer rgba = rasterizerPixelsToRgba(pixels);
             gl.glTexSubImage3D(GL3.GL_TEXTURE_2D_ARRAY, 0, 0, 0, textureId, LAYER_SIZE, LAYER_SIZE, 1, GL.GL_RGBA, GL.GL_UNSIGNED_BYTE, rgba);
             uploaded++;
         }
         gl.glBindTexture(GL3.GL_TEXTURE_2D_ARRAY, 0);
-        System.out.println("[OPENGL-TEXTURES] GPU texture array ready: " + uploaded + "/" + layerCount + " cache textures (" + LAYER_SIZE + "x" + LAYER_SIZE + ").");
+        System.out.println("[OPENGL-TEXTURES] GPU texture array ready: " + uploaded + "/" + layerCount + " rasterizer textures (" + LAYER_SIZE + "x" + LAYER_SIZE + ").");
     }
 
-    private ByteBuffer resample(Texture texture) {
-        int width = texture.getWidth(), height = texture.getHeight();
-        int[] pixels = texture.getPixels();
-        boolean alpha = texture.supportsAlpha();
-        ByteBuffer out = ByteBuffer.allocateDirect(LAYER_SIZE * LAYER_SIZE * 4);
-        for (int y = 0; y < LAYER_SIZE; y++) {
-            int sy = Math.min(height - 1, y * height / LAYER_SIZE);
-            for (int x = 0; x < LAYER_SIZE; x++) {
-                int sx = Math.min(width - 1, x * width / LAYER_SIZE);
-                int rgb = pixels[sx + sy * width];
-                int a = alpha ? ((rgb >>> 24) & 0xff) : 0xff;
-                if ((rgb & 0xffffff) == 0xff00ff) a = 0;
-                out.put((byte)((rgb >> 16) & 0xff)); out.put((byte)((rgb >> 8) & 0xff)); out.put((byte)(rgb & 0xff)); out.put((byte)a);
-            }
+    /**
+     * TextureLoader#getTexturePixels is the source the legacy GameRasterizer uses.
+     * OSRS loaders return four 128x128 brightness banks; bank zero is the normal
+     * texture. Uploading Texture#getPixels directly bypassed that path and could
+     * disagree with the texture RSPSi actually draws.
+     */
+    private ByteBuffer rasterizerPixelsToRgba(int[] pixels) {
+        ByteBuffer out = ByteBuffer.allocateDirect(TEXELS_PER_LAYER * 4);
+        for (int i = 0; i < TEXELS_PER_LAYER; i++) {
+            int rgb = pixels[i];
+            int a = ((rgb & 0xffffff) == 0xff00ff) ? 0 : 0xff;
+            out.put((byte)((rgb >> 16) & 0xff));
+            out.put((byte)((rgb >> 8) & 0xff));
+            out.put((byte)(rgb & 0xff));
+            out.put((byte)a);
         }
         out.flip();
         return out;
