@@ -20,5 +20,5 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '6.1'
-      - name: Build working editor and OpenGL prototype
-        run: gradle :Editor:classes :OpenGLPrototype:classes --stacktrace
+      - name: Build standalone OpenGL pipeline
+        run: gradle -PstandaloneOpenGL :OpenGLPrototype:classes --stacktrace
