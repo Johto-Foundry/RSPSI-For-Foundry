@@ -1,0 +1,3 @@
+dependencies {
+    compile project(':RS-Cache-Library')
+}
