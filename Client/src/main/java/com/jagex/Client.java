@@ -209,6 +209,7 @@ public final class Client implements Runnable {
 	private volatile boolean aBoolean962;
 	public ImageGraphicsBuffer gameImageBuffer;
 	private final AtomicBoolean framePresentScheduled = new AtomicBoolean(false);
+	private long lastPerfConsoleLog = 0L;
 	private int anInt1014;
 	private int anInt1015;
 	private int anInt1131;
@@ -1190,6 +1191,12 @@ public final class Client implements Runnable {
 		long presentStart = System.nanoTime();
 		gameImageBuffer.finalize();
 		lastPresentPrepareMs = (System.nanoTime() - presentStart) / 1_000_000.0;
+		long now = System.currentTimeMillis();
+		if (now - lastPerfConsoleLog >= 1000L) {
+			lastPerfConsoleLog = now;
+			System.out.printf("[PERF] FPS: %d | Frame: %.2f ms | Render: %.2f ms | Present: %.2f ms%n",
+				fps, lastFrameMs, lastRenderMs, lastPresentPrepareMs);
+		}
 		WritableImage finalImg = gameImageBuffer.finalImage;
 		if (framePresentScheduled.compareAndSet(false, true)) {
 			Platform.runLater(() -> {
