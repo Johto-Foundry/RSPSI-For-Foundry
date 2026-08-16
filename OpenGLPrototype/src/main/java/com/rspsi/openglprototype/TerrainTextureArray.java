@@ -50,17 +50,14 @@ public final class TerrainTextureArray {
         System.out.println("[OPENGL-TEXTURES] GPU texture array ready: " + uploaded + "/" + layerCount + " rasterizer textures (" + LAYER_SIZE + "x" + LAYER_SIZE + ").");
     }
 
-    /**
-     * TextureLoader#getTexturePixels is the source the legacy GameRasterizer uses.
-     * OSRS loaders return four 128x128 brightness banks; bank zero is the normal
-     * texture. Uploading Texture#getPixels directly bypassed that path and could
-     * disagree with the texture RSPSi actually draws.
-     */
     private ByteBuffer rasterizerPixelsToRgba(int[] pixels) {
         ByteBuffer out = ByteBuffer.allocateDirect(TEXELS_PER_LAYER * 4);
         for (int i = 0; i < TEXELS_PER_LAYER; i++) {
-            int rgb = pixels[i];
-            int a = ((rgb & 0xffffff) == 0xff00ff) ? 0 : 0xff;
+            int rgb = pixels[i] & 0xffffff;
+            // RS model textures commonly encode cut-out/transparent areas as 0.
+            // The software rasterizer treats those texels as holes; preserving
+            // them as opaque produced the large black wedges seen in foliage.
+            int a = (rgb == 0 || rgb == 0xff00ff) ? 0 : 0xff;
             out.put((byte)((rgb >> 16) & 0xff));
             out.put((byte)((rgb >> 8) & 0xff));
             out.put((byte)(rgb & 0xff));
