@@ -21,8 +21,13 @@ import java.util.List;
 
 /**
  * Experimental live GPU view of the terrain already loaded by the working
- * RSPSi editor. This is intentionally read-only: editing and saving continue
- * to be owned by the existing editor while the GPU renderer is developed.
+ * RSPSi editor. Editing and saving remain owned by the existing editor while
+ * this renderer progressively replaces the software viewport.
+ *
+ * The default camera mirrors the live RSPSi camera so the GPU window behaves
+ * like the existing editor rather than a whole-map inspection view. Holding
+ * the right mouse button in this preview temporarily switches to the original
+ * orbit camera, which is kept as a useful debugging fallback.
  */
 public final class LiveTerrainPreview implements GLEventListener {
     private final Client client;
@@ -32,14 +37,18 @@ public final class LiveTerrainPreview implements GLEventListener {
 
     private int viewportWidth = 1280;
     private int viewportHeight = 720;
+
+    // Whole-map fallback/orbit camera retained for debugging.
     private float sceneCenterX;
     private float sceneCenterZ;
     private float sceneRadius = 12000.0f;
-    private float yaw = 45.0f;
-    private float pitch = 42.0f;
-    private float zoom = 1.8f;
+    private float orbitYaw = 45.0f;
+    private float orbitPitch = 42.0f;
+    private float orbitZoom = 1.8f;
     private int dragX;
     private int dragY;
+    private volatile boolean orbitOverride;
+
     private long frames;
     private long lastFpsNanos = System.nanoTime();
 
@@ -56,7 +65,7 @@ public final class LiveTerrainPreview implements GLEventListener {
         GLProfile.initSingleton();
         GLWindow window = GLWindow.create(new GLCapabilities(GLProfile.get(GLProfile.GL3)));
         LiveTerrainPreview preview = new LiveTerrainPreview(client);
-        window.setTitle("RSPSi for Foundry - Live OpenGL Terrain");
+        window.setTitle("RSPSi for Foundry - Live OpenGL Terrain (RSPSi camera)");
         window.setSize(1280, 720);
         window.addGLEventListener(preview);
 
@@ -68,23 +77,40 @@ public final class LiveTerrainPreview implements GLEventListener {
             public void mousePressed(MouseEvent e) {
                 preview.dragX = e.getX();
                 preview.dragY = e.getY();
+                // Right mouse is a temporary whole-map/orbit debugging camera.
+                if ((e.getModifiers() & MouseEvent.BUTTON3_MASK) != 0) {
+                    preview.orbitOverride = true;
+                }
+            }
+
+            @Override
+            public void mouseReleased(MouseEvent e) {
+                if ((e.getModifiers() & MouseEvent.BUTTON3_MASK) != 0) {
+                    preview.orbitOverride = false;
+                }
             }
 
             @Override
             public void mouseDragged(MouseEvent e) {
+                if (!preview.orbitOverride) {
+                    return;
+                }
                 int dx = e.getX() - preview.dragX;
                 int dy = e.getY() - preview.dragY;
                 preview.dragX = e.getX();
                 preview.dragY = e.getY();
-                preview.yaw += dx * 0.35f;
-                preview.pitch = clamp(preview.pitch - dy * 0.25f, 8.0f, 82.0f);
+                preview.orbitYaw += dx * 0.35f;
+                preview.orbitPitch = clamp(preview.orbitPitch - dy * 0.25f, 8.0f, 82.0f);
             }
 
             @Override
             public void mouseWheelMoved(MouseEvent e) {
+                if (!preview.orbitOverride) {
+                    return;
+                }
                 float[] rotation = e.getRotation();
                 if (rotation.length > 1) {
-                    preview.zoom = clamp(preview.zoom + rotation[1] * 0.12f, 0.45f, 5.0f);
+                    preview.orbitZoom = clamp(preview.orbitZoom + rotation[1] * 0.12f, 0.45f, 5.0f);
                 }
             }
         });
@@ -128,12 +154,13 @@ public final class LiveTerrainPreview implements GLEventListener {
         float maxZ = Float.NEGATIVE_INFINITY;
         int uploaded = 0;
 
+        int plane = Math.max(0, Math.min(3, client.getPlane()));
         for (Chunk chunk : client.chunks) {
             if (chunk == null || chunk.mapRegion == null) {
                 continue;
             }
 
-            TerrainMeshSnapshot mesh = TerrainMeshBuilder.build(chunk, 0);
+            TerrainMeshSnapshot mesh = TerrainMeshBuilder.build(chunk, plane);
             if (mesh.getIndices().length == 0) {
                 continue;
             }
@@ -159,8 +186,9 @@ public final class LiveTerrainPreview implements GLEventListener {
             sceneRadius = Math.max(maxX - minX, maxZ - minZ) * 0.58f;
         }
 
-        System.out.println("[OPENGL-LIVE] GPU terrain chunks uploaded: " + uploaded);
-        System.out.println("[OPENGL-LIVE] Drag mouse to orbit, mouse wheel to zoom.");
+        System.out.println("[OPENGL-LIVE] GPU terrain chunks uploaded: " + uploaded + " | plane=" + plane);
+        System.out.println("[OPENGL-LIVE] Camera now mirrors RSPSi. Move/rotate the normal editor camera to compare views.");
+        System.out.println("[OPENGL-LIVE] Hold right mouse in this window for temporary whole-map orbit mode.");
     }
 
     @Override
@@ -170,19 +198,11 @@ public final class LiveTerrainPreview implements GLEventListener {
         gl.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT);
 
         float aspect = viewportHeight <= 0 ? 1.0f : (float) viewportWidth / (float) viewportHeight;
-        float distance = sceneRadius * zoom;
-        float yawRadians = (float) Math.toRadians(yaw);
-        float pitchRadians = (float) Math.toRadians(pitch);
-        float horizontal = (float) Math.cos(pitchRadians) * distance;
-        float eyeX = sceneCenterX + (float) Math.sin(yawRadians) * horizontal;
-        float eyeZ = sceneCenterZ + (float) Math.cos(yawRadians) * horizontal;
-        float eyeY = (float) Math.sin(pitchRadians) * distance;
-
-        viewProjection.identity()
-                .perspective((float) Math.toRadians(55.0), aspect, 32.0f, Math.max(100000.0f, sceneRadius * 10.0f))
-                .lookAt(eyeX, eyeY, eyeZ,
-                        sceneCenterX, 0.0f, sceneCenterZ,
-                        0.0f, 1.0f, 0.0f);
+        if (orbitOverride) {
+            buildOrbitCamera(aspect);
+        } else {
+            buildRspsiCamera(aspect);
+        }
 
         shader.use(gl);
         shader.setViewProjection(gl, viewProjection);
@@ -193,10 +213,65 @@ public final class LiveTerrainPreview implements GLEventListener {
         frames++;
         long now = System.nanoTime();
         if (now - lastFpsNanos >= 1_000_000_000L) {
-            System.out.println("[OPENGL-LIVE] FPS: " + frames + " | terrainChunks=" + terrain.size());
+            System.out.println("[OPENGL-LIVE] FPS: " + frames
+                    + " | terrainChunks=" + terrain.size()
+                    + " | camera=" + (orbitOverride ? "orbit" : "rspsi")
+                    + " | pos=" + (client.xCameraPos / 128) + "," + (client.yCameraPos / 128) + "," + client.zCameraPos);
             frames = 0;
             lastFpsNanos = now;
         }
+    }
+
+    /**
+     * Mirrors the coordinate system used by SceneGraph.renderScene(). RSPSi's
+     * X/Y are ground-plane coordinates and zCameraPos is vertical. Our OpenGL
+     * terrain uses X/Z for the ground plane and -tileHeight for vertical Y.
+     */
+    private void buildRspsiCamera(float aspect) {
+        float eyeX = client.xCameraPos;
+        float eyeY = -client.zCameraPos;
+        float eyeZ = client.yCameraPos;
+
+        // Jagex angle units are 0..2047 for one complete turn.
+        float yaw = (float) (client.xCameraCurve * (Math.PI * 2.0 / 2048.0));
+        float pitch = (float) (client.yCameraCurve * (Math.PI * 2.0 / 2048.0));
+
+        // Matches Client.handleKeyInputs(): forward is -sin(yaw), +cos(yaw)
+        // on the map plane. Converting client vertical Z to OpenGL Y negates
+        // the pitch contribution.
+        float cosPitch = (float) Math.cos(pitch);
+        float dirX = -(float) Math.sin(yaw) * cosPitch;
+        float dirY = -(float) Math.sin(pitch);
+        float dirZ = (float) Math.cos(yaw) * cosPitch;
+
+        // Avoid a degenerate lookAt if a future camera state becomes vertical.
+        if (Math.abs(dirX) + Math.abs(dirY) + Math.abs(dirZ) < 0.0001f) {
+            dirZ = 1.0f;
+        }
+
+        viewProjection.identity()
+                .perspective((float) Math.toRadians(55.0), aspect, 16.0f, 150000.0f)
+                .lookAt(eyeX, eyeY, eyeZ,
+                        eyeX + dirX * 1024.0f,
+                        eyeY + dirY * 1024.0f,
+                        eyeZ + dirZ * 1024.0f,
+                        0.0f, 1.0f, 0.0f);
+    }
+
+    private void buildOrbitCamera(float aspect) {
+        float distance = sceneRadius * orbitZoom;
+        float yawRadians = (float) Math.toRadians(orbitYaw);
+        float pitchRadians = (float) Math.toRadians(orbitPitch);
+        float horizontal = (float) Math.cos(pitchRadians) * distance;
+        float eyeX = sceneCenterX + (float) Math.sin(yawRadians) * horizontal;
+        float eyeZ = sceneCenterZ + (float) Math.cos(yawRadians) * horizontal;
+        float eyeY = (float) Math.sin(pitchRadians) * distance;
+
+        viewProjection.identity()
+                .perspective((float) Math.toRadians(55.0), aspect, 32.0f, Math.max(100000.0f, sceneRadius * 10.0f))
+                .lookAt(eyeX, eyeY, eyeZ,
+                        sceneCenterX, 0.0f, sceneCenterZ,
+                        0.0f, 1.0f, 0.0f);
     }
 
     @Override
