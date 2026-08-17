@@ -53,19 +53,9 @@ public final class TerrainMeshBuilder {
                 }
                 textured+=appendShaped(shaped,pos,col,uv,tex,idx); shapedCount++;
             }
-            else if(simple!=null){ if(appendSimple(chunk,plane,mx,my,simple,pos,col,uv,tex,idx)) textured+=2; simpleCount++; }
+            else if(simple!=null){ textured+=appendSimple(chunk,plane,mx,my,simple,pos,col,uv,tex,idx); simpleCount++; }
             else {
-                /*
-                 * RSPSi does not draw a floor surface when the SceneTile has neither a
-                 * SimpleTile nor a ShapedTile. The previous OpenGL prototype invented a
-                 * fallback quad from map underlay/height data here. That plugged genuine
-                 * scene voids (for example the Wilderness ditch opening) with an ordinary
-                 * ground tile, hiding recessed scenery geometry underneath it.
-                 *
-                 * SceneGraph is the rendering source of truth: no scene floor => emit no
-                 * GPU terrain for this tile. Raw underlay data may still exist in the map
-                 * arrays, but it is not sufficient to mean that RSPSi renders a surface.
-                 */
+                /* SceneGraph is the rendering source of truth: no scene floor => no GPU terrain. */
                 voidSkipped++;
             }
         }
@@ -83,11 +73,23 @@ public final class TerrainMeshBuilder {
         for(int tri=0;tri<a.length;tri++){
             int ia=a[tri],ib=b[tri],ic=cc[tri]; if(!valid(ia,xs.length)||!valid(ib,xs.length)||!valid(ic,xs.length))continue;
             int requestedTextureId=(textures!=null&&tri<textures.length)?textures[tri]:-1;
+
+            /*
+             * This 0xbc614e value is not a colour to be repaired/fallback-filled. It is
+             * RSPSi's "do not draw this terrain triangle" sentinel. SceneGraph's
+             * renderShapedTile() skips an untextured triangle when triangleHslA has this
+             * value (unless the editor's explicit Show hidden tiles debug option is on).
+             * Converting it to an underlay colour here was filling intended holes such as
+             * the Wilderness ditch with ordinary ground.
+             */
+            int rawA=ha!=null&&tri<ha.length?ha[tri]:HIDDEN_COLOUR;
+            if(requestedTextureId<0&&rawA==HIDDEN_COLOUR) continue;
+
             boolean hasTexture=textureAvailable(requestedTextureId);
             int textureId=hasTexture?requestedTextureId:-1;
             if(hasTexture)textured++;
             int fb=t.getUnderlayColour(); if(requestedTextureId>=0){ if(display!=null&&tri<display.length)fb=paletteRgb(display[tri],t.getTextureColour()); else fb=paletteRgb(t.getTextureColour(),t.getUnderlayColour()); }
-            int ca=ha!=null&&tri<ha.length?ha[tri]:fb, cb=hb!=null&&tri<hb.length?hb[tri]:fb, cv=hc!=null&&tri<hc.length?hc[tri]:fb;
+            int ca=rawA, cb=hb!=null&&tri<hb.length?hb[tri]:fb, cv=hc!=null&&tri<hc.length?hc[tri]:fb;
             int base=p.size/3;
             vertex(p,c,uv,tex,xs[ia],-ys[ia],zs[ia],paletteRgb(ca,fb),textureId);
             vertex(p,c,uv,tex,xs[ib],-ys[ib],zs[ib],paletteRgb(cb,fb),textureId);
@@ -97,7 +99,7 @@ public final class TerrainMeshBuilder {
         return textured;
     }
 
-    private static boolean appendSimple(Chunk chunk,int plane,int x,int y,SimpleTile t,FloatCollector p,FloatCollector c,FloatCollector uv,FloatCollector tex,IntCollector ind){
+    private static int appendSimple(Chunk chunk,int plane,int x,int y,SimpleTile t,FloatCollector p,FloatCollector c,FloatCollector uv,FloatCollector tex,IntCollector ind){
         float x0=x*TILE_SIZE,x1=(x+1)*TILE_SIZE,z0=y*TILE_SIZE,z1=(y+1)*TILE_SIZE;
         float h00=-chunk.mapRegion.tileHeights[plane][x][y],h10=-chunk.mapRegion.tileHeights[plane][x+1][y],h01=-chunk.mapRegion.tileHeights[plane][x][y+1],h11=-chunk.mapRegion.tileHeights[plane][x+1][y+1];
         int floor=resolveTileRgb(chunk,plane,x,y);
@@ -105,11 +107,26 @@ public final class TerrainMeshBuilder {
         boolean hasTexture=requestedTexture&&textureAvailable(t.getTexture());
         int textureId=hasTexture?t.getTexture():-1;
         int fb=requestedTexture?paletteRgb(t.getColour(),floor):floor;
-        int centre=paletteRgb(t.getCentreColour(),fb),east=paletteRgb(t.getEastColour(),fb),north=paletteRgb(t.getNorthColour(),fb),ne=paletteRgb(t.getNorthEastColour(),fb);
-        int base=p.size/3;
-        vertex(p,c,uv,tex,x0,h00,z0,centre,textureId); vertex(p,c,uv,tex,x0,h01,z1,north,textureId); vertex(p,c,uv,tex,x1,h10,z0,east,textureId);
-        vertex(p,c,uv,tex,x1,h10,z0,east,textureId); vertex(p,c,uv,tex,x0,h01,z1,north,textureId); vertex(p,c,uv,tex,x1,h11,z1,ne,textureId);
-        for(int i=0;i<6;i++)ind.add(base+i); return hasTexture;
+        int rawCentre=t.getCentreColour(), rawEast=t.getEastColour(), rawNorth=t.getNorthColour(), rawNe=t.getNorthEastColour();
+        int centre=paletteRgb(rawCentre,fb),east=paletteRgb(rawEast,fb),north=paletteRgb(rawNorth,fb),ne=paletteRgb(rawNe,fb);
+        int texturedTriangles=0;
+
+        // SceneGraph.renderPlainTile skips this triangle when its lead colour is HIDDEN_COLOUR.
+        if(requestedTexture || rawCentre!=HIDDEN_COLOUR){
+            int base=p.size/3;
+            vertex(p,c,uv,tex,x0,h00,z0,centre,textureId); vertex(p,c,uv,tex,x0,h01,z1,north,textureId); vertex(p,c,uv,tex,x1,h10,z0,east,textureId);
+            ind.add(base);ind.add(base+1);ind.add(base+2);
+            if(hasTexture)texturedTriangles++;
+        }
+
+        // Same rule for the second half of the simple tile, keyed by north-east colour.
+        if(requestedTexture || rawNe!=HIDDEN_COLOUR){
+            int base=p.size/3;
+            vertex(p,c,uv,tex,x1,h10,z0,east,textureId); vertex(p,c,uv,tex,x0,h01,z1,north,textureId); vertex(p,c,uv,tex,x1,h11,z1,ne,textureId);
+            ind.add(base);ind.add(base+1);ind.add(base+2);
+            if(hasTexture)texturedTriangles++;
+        }
+        return texturedTriangles;
     }
 
     private static boolean textureAvailable(int textureId){
