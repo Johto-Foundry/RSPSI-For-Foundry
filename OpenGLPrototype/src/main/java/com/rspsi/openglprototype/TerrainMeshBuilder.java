@@ -24,7 +24,7 @@ public final class TerrainMeshBuilder {
         if(chunk==null||chunk.mapRegion==null||graph==null) return empty();
         FloatCollector pos=new FloatCollector(CHUNK_SIZE*CHUNK_SIZE*54), col=new FloatCollector(CHUNK_SIZE*CHUNK_SIZE*54), uv=new FloatCollector(CHUNK_SIZE*CHUNK_SIZE*36), tex=new FloatCollector(CHUNK_SIZE*CHUNK_SIZE*18);
         IntCollector idx=new IntCollector(CHUNK_SIZE*CHUNK_SIZE*18);
-        int fallback=0, shapedCount=0, simpleCount=0, textured=0;
+        int voidSkipped=0, shapedCount=0, simpleCount=0, textured=0;
         int shapedHeightMismatchTiles=0, shapedHeightUnexpectedTiles=0, shapedHeightExactTiles=0;
         int maxShapedDelta=0;
         int diagPrinted=0;
@@ -54,9 +54,22 @@ public final class TerrainMeshBuilder {
                 textured+=appendShaped(shaped,pos,col,uv,tex,idx); shapedCount++;
             }
             else if(simple!=null){ if(appendSimple(chunk,plane,mx,my,simple,pos,col,uv,tex,idx)) textured+=2; simpleCount++; }
-            else { appendFallback(chunk,plane,mx,my,pos,col,uv,tex,idx); fallback++; }
+            else {
+                /*
+                 * RSPSi does not draw a floor surface when the SceneTile has neither a
+                 * SimpleTile nor a ShapedTile. The previous OpenGL prototype invented a
+                 * fallback quad from map underlay/height data here. That plugged genuine
+                 * scene voids (for example the Wilderness ditch opening) with an ordinary
+                 * ground tile, hiding recessed scenery geometry underneath it.
+                 *
+                 * SceneGraph is the rendering source of truth: no scene floor => emit no
+                 * GPU terrain for this tile. Raw underlay data may still exist in the map
+                 * arrays, but it is not sufficient to mean that RSPSi renders a surface.
+                 */
+                voidSkipped++;
+            }
         }
-        System.out.println("[OPENGL-TERRAIN] chunk="+(chunk.offsetX/64)+","+(chunk.offsetY/64)+" simple="+simpleCount+" shaped="+shapedCount+" fallback="+fallback+" texturedTriangles="+textured+" triangles="+(idx.size/3));
+        System.out.println("[OPENGL-TERRAIN] chunk="+(chunk.offsetX/64)+","+(chunk.offsetY/64)+" simple="+simpleCount+" shaped="+shapedCount+" voidSkipped="+voidSkipped+" texturedTriangles="+textured+" triangles="+(idx.size/3));
         if(shapedCount>0) System.out.println("[OPENGL-SHAPED-HEIGHT-SUMMARY] chunk="+(chunk.offsetX/64)+","+(chunk.offsetY/64)+" exact="+shapedHeightExactTiles+" mismatch="+shapedHeightMismatchTiles+" unexpected="+shapedHeightUnexpectedTiles+" maxSpreadDelta="+maxShapedDelta+" (diagnostic only; rendering unchanged)");
         return new TerrainMeshSnapshot(pos.toArray(),col.toArray(),uv.toArray(),tex.toArray(),idx.toArray());
     }
@@ -101,14 +114,6 @@ public final class TerrainMeshBuilder {
 
     private static boolean textureAvailable(int textureId){
         return textureId>=0&&TextureLoader.instance!=null&&textureId<TextureLoader.instance.count()&&TextureLoader.getTexture(textureId)!=null;
-    }
-
-    private static void appendFallback(Chunk chunk,int plane,int x,int y,FloatCollector p,FloatCollector c,FloatCollector uv,FloatCollector tex,IntCollector ind){
-        float x0=x*TILE_SIZE,x1=(x+1)*TILE_SIZE,z0=y*TILE_SIZE,z1=(y+1)*TILE_SIZE;
-        float h00=-chunk.mapRegion.tileHeights[plane][x][y],h10=-chunk.mapRegion.tileHeights[plane][x+1][y],h01=-chunk.mapRegion.tileHeights[plane][x][y+1],h11=-chunk.mapRegion.tileHeights[plane][x+1][y+1]; int rgb=resolveTileRgb(chunk,plane,x,y),base=p.size/3;
-        vertex(p,c,uv,tex,x0,h00,z0,rgb,-1);vertex(p,c,uv,tex,x0,h01,z1,rgb,-1);vertex(p,c,uv,tex,x1,h10,z0,rgb,-1);vertex(p,c,uv,tex,x1,h10,z0,rgb,-1);
-        vertex(p,c,uv,tex,x0,h01,z1,rgb,-1);vertex(p,c,uv,tex,x1,h11,z1,rgb,-1);
-        for(int i=0;i<6;i++)ind.add(base+i);
     }
 
     private static void vertex(FloatCollector p,FloatCollector c,FloatCollector uv,FloatCollector tex,float x,float y,float z,int rgb,int textureId){
