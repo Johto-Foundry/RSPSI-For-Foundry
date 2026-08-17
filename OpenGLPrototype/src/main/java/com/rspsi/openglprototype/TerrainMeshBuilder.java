@@ -73,25 +73,9 @@ public final class TerrainMeshBuilder {
             int ia=a[tri],ib=b[tri],ic=cc[tri]; if(!valid(ia,xs.length)||!valid(ib,xs.length)||!valid(ic,xs.length))continue;
             int requestedTextureId=(textures!=null&&tri<textures.length)?textures[tri]:-1;
 
-            /*
-             * This 0xbc614e value is not a colour to be repaired/fallback-filled. It is
-             * RSPSi's "do not draw this terrain triangle" sentinel. SceneGraph's
-             * renderShapedTile() skips an untextured triangle when triangleHslA has this
-             * value (unless the editor's explicit Show hidden tiles debug option is on).
-             * Converting it to an underlay colour here was filling intended holes such as
-             * the Wilderness ditch with ordinary ground.
-             */
             int rawA=ha!=null&&tri<ha.length?ha[tri]:HIDDEN_COLOUR;
             if(requestedTextureId<0&&rawA==HIDDEN_COLOUR) continue;
 
-            /*
-             * Do not reinterpret a SceneGraph textured triangle as an untextured
-             * overlay-coloured triangle just because the GPU texture loader cannot
-             * currently supply that texture. That behaviour was introduced by the
-             * old 5c198e9 tree-debug experiment and changes terrain/overlay semantics.
-             * Preserve the SceneGraph's requested texture identity here; texture
-             * availability is a texture-upload concern, not a terrain-shape decision.
-             */
             boolean hasTexture=requestedTextureId>=0;
             int textureId=requestedTextureId;
             if(hasTexture)textured++;
@@ -118,16 +102,21 @@ public final class TerrainMeshBuilder {
         int centre=paletteRgb(rawCentre,fb),east=paletteRgb(rawEast,fb),north=paletteRgb(rawNorth,fb),ne=paletteRgb(rawNe,fb);
         int texturedTriangles=0;
 
-        // SceneGraph.renderPlainTile skips this triangle when its lead colour is HIDDEN_COLOUR.
-        if(requestedTexture || rawCentre!=HIDDEN_COLOUR){
+        /*
+         * RSPSi runs SceneGraph.lowMemory=true by default. In renderPlainTile that
+         * means even a tile carrying a texture ID goes through the shaded path, and
+         * 0xbc614e still means "do not draw this half of the tile". The previous
+         * `requestedTexture || ...` exception was fabricating exactly the static
+         * overlay-coloured wedges that remain over the Wilderness ditch/GE opening.
+         */
+        if(rawCentre!=HIDDEN_COLOUR){
             int base=p.size/3;
             vertex(p,c,uv,tex,x0,h00,z0,centre,textureId); vertex(p,c,uv,tex,x0,h01,z1,north,textureId); vertex(p,c,uv,tex,x1,h10,z0,east,textureId);
             ind.add(base);ind.add(base+1);ind.add(base+2);
             if(hasTexture)texturedTriangles++;
         }
 
-        // Same rule for the second half of the simple tile, keyed by north-east colour.
-        if(requestedTexture || rawNe!=HIDDEN_COLOUR){
+        if(rawNe!=HIDDEN_COLOUR){
             int base=p.size/3;
             vertex(p,c,uv,tex,x1,h10,z0,east,textureId); vertex(p,c,uv,tex,x0,h01,z1,north,textureId); vertex(p,c,uv,tex,x1,h11,z1,ne,textureId);
             ind.add(base);ind.add(base+1);ind.add(base+2);
