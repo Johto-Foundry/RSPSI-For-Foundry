@@ -30,9 +30,26 @@ public final class TerrainMeshBuilder {
         for(int ly=0;ly<CHUNK_SIZE;ly++) for(int lx=0;lx<CHUNK_SIZE;lx++){
             int mx=chunk.offsetX+lx,my=chunk.offsetY+ly; SceneTile tile=null;
             if(plane>=0&&plane<graph.tiles.length&&mx>=0&&mx<graph.width&&my>=0&&my<graph.length) tile=graph.tiles[plane][mx][my];
-            ShapedTile shaped=tile==null?null:tile.temporaryShapedTile.orElse(tile.shape);
-            SimpleTile simple=tile==null?null:tile.temporarySimpleTile.orElse(tile.simple);
-            if(shaped!=null&&shaped.getTriangleA()!=null){
+
+            /*
+             * Match SceneGraph.renderTile's floor-choice order exactly. RSPSi does NOT
+             * independently resolve a shaped and simple tile and then prefer shaped.
+             * It chooses one source in this order:
+             *   temporarySimple -> temporaryShaped -> simple -> shaped.
+             * The old OpenGL builder could therefore render a shaped/overlay surface
+             * where RSPSi was actually rendering the simple/temporary surface instead.
+             */
+            SimpleTile simple=null;
+            ShapedTile shaped=null;
+            if(tile!=null){
+                if(tile.temporarySimpleTile.isPresent()) simple=tile.temporarySimpleTile.get();
+                else if(tile.temporaryShapedTile.isPresent()) shaped=tile.temporaryShapedTile.get();
+                else if(tile.simple!=null) simple=tile.simple;
+                else if(tile.shape!=null) shaped=tile.shape;
+            }
+
+            if(simple!=null){ textured+=appendSimple(chunk,plane,mx,my,simple,pos,col,uv,tex,idx); simpleCount++; }
+            else if(shaped!=null&&shaped.getTriangleA()!=null){
                 int[] ys=shaped.getOrigVertexY();
                 if(ys!=null&&ys.length>0&&mx>=0&&my>=0&&mx+1<chunk.mapRegion.tileHeights[plane].length&&my+1<chunk.mapRegion.tileHeights[plane][mx].length){
                     int h00=chunk.mapRegion.tileHeights[plane][mx][my], h10=chunk.mapRegion.tileHeights[plane][mx+1][my], h01=chunk.mapRegion.tileHeights[plane][mx][my+1], h11=chunk.mapRegion.tileHeights[plane][mx+1][my+1];
@@ -52,7 +69,6 @@ public final class TerrainMeshBuilder {
                 }
                 textured+=appendShaped(shaped,pos,col,uv,tex,idx); shapedCount++;
             }
-            else if(simple!=null){ textured+=appendSimple(chunk,plane,mx,my,simple,pos,col,uv,tex,idx); simpleCount++; }
             else {
                 /* SceneGraph is the rendering source of truth: no scene floor => no GPU terrain. */
                 voidSkipped++;
