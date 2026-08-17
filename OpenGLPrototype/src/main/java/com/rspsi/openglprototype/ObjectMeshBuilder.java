@@ -10,6 +10,7 @@ import com.jagex.map.object.DefaultWorldObject;
 import com.jagex.map.object.GameObject;
 import com.jagex.map.object.WallDecoration;
 import com.jagex.map.tile.SceneTile;
+import com.jagex.util.Constants;
 
 import java.lang.reflect.Field;
 import java.util.Arrays;
@@ -111,8 +112,11 @@ public final class ObjectMeshBuilder {
         int fc=Math.min(m.numFaces,Math.min(m.faceIndicesA.length,Math.min(m.faceIndicesB.length,m.faceIndicesC.length)));
         if(vc<=0||fc<=0)return;
 
-        double radians=orientation*(Math.PI*2.0/2048.0);
-        float sin=(float)Math.sin(radians),cos=(float)Math.cos(radians);
+        // Match Mesh.render() exactly: object orientation is fixed-point table trig with
+        // a >>16 truncation, not floating-point sin/cos. Small differences here can flip
+        // the winding result for narrow/recessed faces such as the Wilderness ditch.
+        int sin=orientation==0?0:Constants.SINE[orientation];
+        int cos=orientation==0?65536:Constants.COSINE[orientation];
 
         for(int face=0;face<fc;face++){
             if(m.faceTypes!=null&&face<m.faceTypes.length&&m.faceTypes[face]==-1)continue;
@@ -140,7 +144,6 @@ public final class ObjectMeshBuilder {
             }
             if(textured&&faceUv==null){
                 if(stats.unmappedByObject.size()<16||stats.unmappedByObject.containsKey(objectId))stats.unmappedByObject.merge(objectId,1,Integer::sum);
-                // Should be unreachable after face-vertex fallback; keep as last-resort safety net.
                 faceUv=new float[][]{{0,0},{1,0},{0,1}};
             }
             if(faceUv==null)faceUv=new float[][]{{0,0},{0,0},{0,0}};
@@ -158,19 +161,6 @@ public final class ObjectMeshBuilder {
         }
     }
 
-    /**
-     * Resolve the texture-mapping triangle exactly the ways this legacy client encodes it:
-     *
-     * 1) OSRS meshes: texture_coordinates[face] selects textureMappingP/M/N.
-     * 2) Models converted through Mesh.convertTexturesTo317(): the converter packs
-     *    the mapping index into the upper bits of faceTypes (2 + index*4). The
-     *    software 317 rasterizer consumes faceTypes >> 2.
-     * 3) Software Mesh.renderFace fallback: when neither path yields a usable mapping
-     *    index (or the resolved vertices are invalid / >= 4096), the face's own
-     *    vertices are used as the mapping triangle. Classic foliage (e.g. 1276/1278)
-     *    relies on this path; the previous hard-coded {0,0}/{1,0}/{0,1} UV fallback
-     *    produced long black/opaque texture streaks.
-     */
     private static MappingResult mappedUvs(Mesh m,int face,int a,int b,int c,int vertexCount){
         int t=-1;
         boolean legacy=false;
@@ -186,20 +176,13 @@ public final class ObjectMeshBuilder {
 
             if(t>=0&&t<m.textureMappingP.length&&t<m.textureMappingM.length&&t<m.textureMappingN.length){
                 int p=m.textureMappingP[t],q=m.textureMappingM[t],r=m.textureMappingN[t];
-                // Match Mesh.renderFace: out-of-range mapping verts fall back to the face itself.
-                if(valid(p,vertexCount)&&valid(q,vertexCount)&&valid(r,vertexCount)
-                        &&p<4096&&q<4096&&r<4096){
-                    return new MappingResult(
-                            new float[][]{basisUv(m,p,q,r,a),basisUv(m,p,q,r,b),basisUv(m,p,q,r,c)},
-                            legacy,false);
+                if(valid(p,vertexCount)&&valid(q,vertexCount)&&valid(r,vertexCount)&&p<4096&&q<4096&&r<4096){
+                    return new MappingResult(new float[][]{basisUv(m,p,q,r,a),basisUv(m,p,q,r,b),basisUv(m,p,q,r,c)},legacy,false);
                 }
             }
         }
 
-        // Software fallback: face vertices are the mapping triangle.
-        return new MappingResult(
-                new float[][]{basisUv(m,a,b,c,a),basisUv(m,a,b,c,b),basisUv(m,a,b,c,c)},
-                false,true);
+        return new MappingResult(new float[][]{basisUv(m,a,b,c,a),basisUv(m,a,b,c,b),basisUv(m,a,b,c,c)},false,true);
     }
 
     private static float[] basisUv(Mesh m,int p,int q,int r,int v){
@@ -223,11 +206,15 @@ public final class ObjectMeshBuilder {
         try{return TextureLoader.getTexturePixels(id)!=null;}catch(RuntimeException ex){return false;}
     }
 
-    private static void appendVertex(Mesh m,int v,int worldX,int worldZ,int renderHeight,float sin,float cos,int rgb,
+    private static void appendVertex(Mesh m,int v,int worldX,int worldZ,int renderHeight,int sin,int cos,int rgb,
                                      float textureId,float[] faceUv,FloatCollector p,FloatCollector col,FloatCollector uv,FloatCollector tex){
-        float lx=m.verticesX[v],ly=m.verticesY[v],lz=m.verticesZ[v];
-        float rx=lx*cos+lz*sin,rz=lz*cos-lx*sin;
-        p.add(worldX+rx);p.add(-renderHeight-ly);p.add(worldZ+rz);
+        int x=m.verticesX[v], y=m.verticesY[v], z=m.verticesZ[v];
+        if(sin!=0){
+            int rotatedX=(z*sin+x*cos)>>16;
+            z=(z*cos-x*sin)>>16;
+            x=rotatedX;
+        }
+        p.add(worldX+x);p.add(-renderHeight-y);p.add(worldZ+z);
         col.add(((rgb>>16)&255)/255f);col.add(((rgb>>8)&255)/255f);col.add((rgb&255)/255f);
         uv.add(faceUv[0]);uv.add(faceUv[1]);tex.add(textureId);
     }
