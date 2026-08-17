@@ -98,6 +98,7 @@ public final class LiveTerrainPreview implements GLEventListener {
         if(uploaded>0){sceneCenterX=(minX+maxX)*0.5f;sceneCenterZ=(minZ+maxZ)*0.5f;sceneRadius=Math.max(maxX-minX,maxZ-minZ)*0.58f;}
 
         TerrainMeshSnapshot objectMesh=ObjectMeshBuilder.build(plane);
+        ObjectRenderDiagnostics.run(plane);
         if(objectMesh.getIndices().length>0){
             objects=new TerrainGpuBuffer();
             objects.upload(gl,objectMesh);
