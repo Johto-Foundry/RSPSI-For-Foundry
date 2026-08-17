@@ -12,11 +12,9 @@ public final class SimpleTerrainShader {
             "void main(){vsColour=aColour;vsTexCoord=aTexCoord;if(aTextureId<0.0){vsTextureId=-1;vsModelTexture=0;}else if(aTextureId>=1000.0){vsTextureId=int((aTextureId-1000.0)+0.5);vsModelTexture=1;}else{vsTextureId=int(aTextureId+0.5);vsModelTexture=0;}gl_Position=uViewProjection*vec4(aPosition,1.0);}\n";
 
     /*
-     * RSPSi does not use conventional model winding + GL_CULL_FACE. Mesh.renderFaces()
-     * projects each fully-visible face and rejects it from its screen-space signed area.
-     * Reproduce that rule only for the object pass. Faces crossing the RS near plane are
-     * deliberately NOT rejected here; OpenGL's near-plane clip then plays the role of
-     * Mesh.method485 rather than incorrectly dropping the whole triangle.
+     * Experimental parity test for Mesh.renderFaces() projected signed-area rejection.
+     * Keep the existing near-plane bypass, but test the opposite area sign after the
+     * mirrored RSPSi camera transform. This is intentionally a one-variable A/B test.
      */
     private static final String GEOMETRY =
             "#version 330 core\n" +
@@ -26,23 +24,16 @@ public final class SimpleTerrainShader {
             "bool rsRejectFace(){if(uObjectPass==0)return false;" +
             "if(gl_in[0].gl_Position.w<=50.0||gl_in[1].gl_Position.w<=50.0||gl_in[2].gl_Position.w<=50.0)return false;" +
             "vec2 a=gl_in[0].gl_Position.xy/gl_in[0].gl_Position.w;vec2 b=gl_in[1].gl_Position.xy/gl_in[1].gl_Position.w;vec2 c=gl_in[2].gl_Position.xy/gl_in[2].gl_Position.w;" +
-            "float glArea=(a.x-b.x)*(c.y-b.y)-(a.y-b.y)*(c.x-b.x);float rsArea=-glArea;return rsArea<=0.0;}\n" +
+            "float glArea=(a.x-b.x)*(c.y-b.y)-(a.y-b.y)*(c.x-b.x);float rsArea=glArea;return rsArea<=0.0;}\n" +
             "void main(){if(rsRejectFace())return;for(int i=0;i<3;i++){vColour=vsColour[i];vTexCoord=vsTexCoord[i];vTextureId=vsTextureId[i];vModelTexture=vsModelTexture[i];gl_Position=gl_in[i].gl_Position;EmitVertex();}EndPrimitive();}\n";
 
     private static final String FRAGMENT =
             "#version 330 core\n" +
             "in vec3 vColour; in vec2 vTexCoord; flat in int vTextureId; flat in int vModelTexture; uniform sampler2DArray uTextures; uniform int uTextureCount; out vec4 fragColor;\n" +
-            // Terrain kept on the existing wrap path until terrain parity is tackled separately.
             "ivec2 rsWrappedTexelCoord(vec2 uv){vec2 wrapped=fract(uv);ivec2 texel=ivec2(floor(wrapped*128.0));return clamp(texel,ivec2(0),ivec2(127));}\n" +
-            // GameRasterizer.drawTexturedLine does NOT wrap model U. It clamps the
-            // horizontal accumulator to 0..16256 (0..127 texels) while V is masked
-            // with 0x3f80, i.e. wrapped modulo 128 rows.
             "ivec2 rsModelTexelCoord(vec2 uv){int x=int(floor(uv.x*128.0));x=clamp(x,0,127);float wy=fract(uv.y);int y=int(floor(wy*128.0));y=clamp(y,0,127);return ivec2(x,y);}\n" +
             "float exactCutoutAlpha(int layer, vec2 uv){return texelFetch(uTextures,ivec3(rsWrappedTexelCoord(uv),layer),0).a;}\n" +
             "vec4 exactModelTexel(int layer, vec2 uv){return texelFetch(uTextures,ivec3(rsModelTexelCoord(uv),layer),0);}\n" +
-            // TextureLoaderOSRS builds four shade banks: 1, 7/8, 3/4 and 5/8.
-            // drawTexturedLine additionally shifts the packed texel by shade>>6,
-            // which is effectively another 1/2 step because loader RGB is masked.
             "float rsModelShadeFactor(float encoded){int s=int(clamp(encoded,0.0,1.0)*127.0+0.5);int bank=(s>>4)&3;float f=bank==0?1.0:(bank==1?0.875:(bank==2?0.75:0.625));if((s>>6)!=0)f*=0.5;return f;}\n" +
             "void main(){if(vTextureId>=0&&vTextureId<uTextureCount){if(vModelTexture==1){vec4 tex=exactModelTexel(vTextureId,vTexCoord);if(tex.a<0.50)discard;float factor=rsModelShadeFactor(vColour.r);fragColor=vec4(tex.rgb*factor,1.0);}else{if(exactCutoutAlpha(vTextureId,vTexCoord)<0.50)discard;vec4 tex=texture(uTextures,vec3(fract(vTexCoord),float(vTextureId)));float light=clamp(0.58+dot(vColour,vec3(0.2126,0.7152,0.0722))*0.55,0.55,1.12);fragColor=vec4(tex.rgb*light,1.0);}}else fragColor=vec4(vColour,1.0);}\n";
 
