@@ -12,20 +12,37 @@ public final class SimpleTerrainShader {
             "void main(){vsColour=aColour;vsTexCoord=aTexCoord;if(aTextureId<0.0){vsTextureId=-1;vsModelTexture=0;}else if(aTextureId>=1000.0){vsTextureId=int((aTextureId-1000.0)+0.5);vsModelTexture=1;}else{vsTextureId=int(aTextureId+0.5);vsModelTexture=0;}gl_Position=uViewProjection*vec4(aPosition,1.0);}\n";
 
     /*
-     * Experimental parity test for Mesh.renderFaces() projected signed-area rejection.
-     * Keep the existing near-plane bypass, but test the opposite area sign after the
-     * mirrored RSPSi camera transform. This is intentionally a one-variable A/B test.
+     * Object-pass parity with Mesh.renderFaces()/method485:
+     *  - ordinary faces use RSPSi's projected signed-area rejection;
+     *  - a face crossing the 50-unit near plane is clipped first instead of being
+     *    blindly kept or blanket-rejected;
+     *  - the reconstructed polygon is winding-tested after clipping, matching the
+     *    software renderer's method485 decision path.
+     *
+     * The OpenGL preview mirrors X to follow RSPSi's editor camera, so RS screen
+     * winding is the negative of the GL/NDC signed area used here.
      */
     private static final String GEOMETRY =
             "#version 330 core\n" +
-            "layout(triangles) in; layout(triangle_strip,max_vertices=3) out;\n" +
+            "layout(triangles) in; layout(triangle_strip,max_vertices=6) out;\n" +
             "in vec3 vsColour[]; in vec2 vsTexCoord[]; flat in int vsTextureId[]; flat in int vsModelTexture[];\n" +
             "out vec3 vColour; out vec2 vTexCoord; flat out int vTextureId; flat out int vModelTexture; uniform int uObjectPass;\n" +
-            "bool rsRejectFace(){if(uObjectPass==0)return false;" +
-            "if(gl_in[0].gl_Position.w<=50.0||gl_in[1].gl_Position.w<=50.0||gl_in[2].gl_Position.w<=50.0)return false;" +
-            "vec2 a=gl_in[0].gl_Position.xy/gl_in[0].gl_Position.w;vec2 b=gl_in[1].gl_Position.xy/gl_in[1].gl_Position.w;vec2 c=gl_in[2].gl_Position.xy/gl_in[2].gl_Position.w;" +
-            "float glArea=(a.x-b.x)*(c.y-b.y)-(a.y-b.y)*(c.x-b.x);float rsArea=glArea;return rsArea<=0.0;}\n" +
-            "void main(){if(rsRejectFace())return;for(int i=0;i<3;i++){vColour=vsColour[i];vTexCoord=vsTexCoord[i];vTextureId=vsTextureId[i];vModelTexture=vsModelTexture[i];gl_Position=gl_in[i].gl_Position;EmitVertex();}EndPrimitive();}\n";
+            "float rsArea(vec4 p0,vec4 p1,vec4 p2){vec2 a=p0.xy/p0.w;vec2 b=p1.xy/p1.w;vec2 c=p2.xy/p2.w;float glArea=(a.x-b.x)*(c.y-b.y)-(a.y-b.y)*(c.x-b.x);return -glArea;}\n" +
+            "void emitVertexData(vec4 p,vec3 colour,vec2 uv){vColour=colour;vTexCoord=uv;vTextureId=vsTextureId[0];vModelTexture=vsModelTexture[0];gl_Position=p;EmitVertex();}\n" +
+            "void main(){\n" +
+            " if(uObjectPass==0){for(int i=0;i<3;i++){vColour=vsColour[i];vTexCoord=vsTexCoord[i];vTextureId=vsTextureId[i];vModelTexture=vsModelTexture[i];gl_Position=gl_in[i].gl_Position;EmitVertex();}EndPrimitive();return;}\n" +
+            " bool allFront=gl_in[0].gl_Position.w>=50.0&&gl_in[1].gl_Position.w>=50.0&&gl_in[2].gl_Position.w>=50.0;\n" +
+            " if(allFront){if(rsArea(gl_in[0].gl_Position,gl_in[1].gl_Position,gl_in[2].gl_Position)<=0.0)return;for(int i=0;i<3;i++){vColour=vsColour[i];vTexCoord=vsTexCoord[i];vTextureId=vsTextureId[i];vModelTexture=vsModelTexture[i];gl_Position=gl_in[i].gl_Position;EmitVertex();}EndPrimitive();return;}\n" +
+            " vec4 srcP[3];vec3 srcC[3];vec2 srcU[3];for(int i=0;i<3;i++){srcP[i]=gl_in[i].gl_Position;srcC[i]=vsColour[i];srcU[i]=vsTexCoord[i];}\n" +
+            " vec4 outP[4];vec3 outC[4];vec2 outU[4];int n=0;\n" +
+            " for(int i=0;i<3;i++){int j=(i+1)%3;vec4 s=srcP[i];vec4 e=srcP[j];vec3 sc=srcC[i];vec3 ec=srcC[j];vec2 su=srcU[i];vec2 eu=srcU[j];bool sIn=s.w>=50.0;bool eIn=e.w>=50.0;\n" +
+            "   if(sIn&&eIn){outP[n]=e;outC[n]=ec;outU[n]=eu;n++;}\n" +
+            "   else if(sIn&&!eIn){float d=e.w-s.w;if(abs(d)>0.00001){float t=(50.0-s.w)/d;outP[n]=mix(s,e,t);outC[n]=mix(sc,ec,t);outU[n]=mix(su,eu,t);n++;}}\n" +
+            "   else if(!sIn&&eIn){float d=e.w-s.w;if(abs(d)>0.00001){float t=(50.0-s.w)/d;outP[n]=mix(s,e,t);outC[n]=mix(sc,ec,t);outU[n]=mix(su,eu,t);n++;}outP[n]=e;outC[n]=ec;outU[n]=eu;n++;}\n" +
+            " }\n" +
+            " if(n<3)return;if(rsArea(outP[0],outP[1],outP[2])<=0.0)return;\n" +
+            " for(int i=1;i<n-1;i++){emitVertexData(outP[0],outC[0],outU[0]);emitVertexData(outP[i],outC[i],outU[i]);emitVertexData(outP[i+1],outC[i+1],outU[i+1]);EndPrimitive();}\n" +
+            "}\n";
 
     private static final String FRAGMENT =
             "#version 330 core\n" +
