@@ -25,16 +25,39 @@ public final class TerrainMeshBuilder {
         FloatCollector pos=new FloatCollector(CHUNK_SIZE*CHUNK_SIZE*54), col=new FloatCollector(CHUNK_SIZE*CHUNK_SIZE*54), uv=new FloatCollector(CHUNK_SIZE*CHUNK_SIZE*36), tex=new FloatCollector(CHUNK_SIZE*CHUNK_SIZE*18);
         IntCollector idx=new IntCollector(CHUNK_SIZE*CHUNK_SIZE*18);
         int fallback=0, shapedCount=0, simpleCount=0, textured=0;
+        int shapedHeightMismatchTiles=0, shapedHeightUnexpectedTiles=0, shapedHeightExactTiles=0;
+        int maxShapedDelta=0;
+        int diagPrinted=0;
         for(int ly=0;ly<CHUNK_SIZE;ly++) for(int lx=0;lx<CHUNK_SIZE;lx++){
             int mx=chunk.offsetX+lx,my=chunk.offsetY+ly; SceneTile tile=null;
             if(plane>=0&&plane<graph.tiles.length&&mx>=0&&mx<graph.width&&my>=0&&my<graph.length) tile=graph.tiles[plane][mx][my];
             ShapedTile shaped=tile==null?null:tile.temporaryShapedTile.orElse(tile.shape);
             SimpleTile simple=tile==null?null:tile.temporarySimpleTile.orElse(tile.simple);
-            if(shaped!=null&&shaped.getTriangleA()!=null){ textured+=appendShaped(shaped,pos,col,uv,tex,idx); shapedCount++; }
+            if(shaped!=null&&shaped.getTriangleA()!=null){
+                int[] ys=shaped.getOrigVertexY();
+                if(ys!=null&&ys.length>0&&mx>=0&&my>=0&&mx+1<chunk.mapRegion.tileHeights[plane].length&&my+1<chunk.mapRegion.tileHeights[plane][mx].length){
+                    int h00=chunk.mapRegion.tileHeights[plane][mx][my], h10=chunk.mapRegion.tileHeights[plane][mx+1][my], h01=chunk.mapRegion.tileHeights[plane][mx][my+1], h11=chunk.mapRegion.tileHeights[plane][mx+1][my+1];
+                    int rawMin=Math.min(Math.min(h00,h10),Math.min(h01,h11)), rawMax=Math.max(Math.max(h00,h10),Math.max(h01,h11));
+                    int shapedMin=ys[0], shapedMax=ys[0];
+                    boolean unexpected=false;
+                    for(int y:ys){ shapedMin=Math.min(shapedMin,y); shapedMax=Math.max(shapedMax,y); if(y<rawMin||y>rawMax) unexpected=true; }
+                    int rawSpread=rawMax-rawMin, shapedSpread=shapedMax-shapedMin;
+                    int delta=Math.abs(shapedSpread-rawSpread); maxShapedDelta=Math.max(maxShapedDelta,delta);
+                    if(unexpected||delta!=0){
+                        shapedHeightMismatchTiles++; if(unexpected)shapedHeightUnexpectedTiles++;
+                        if(diagPrinted<40){
+                            System.out.println("[OPENGL-SHAPED-HEIGHT] chunk="+(chunk.offsetX/64)+","+(chunk.offsetY/64)+" tile="+mx+","+my+" local="+lx+","+ly+" rawCorners=["+h00+","+h10+","+h01+","+h11+"] rawRange="+rawMin+".."+rawMax+" rawSpread="+rawSpread+" shapedRange="+shapedMin+".."+shapedMax+" shapedSpread="+shapedSpread+" unexpected="+unexpected+" vertices="+Arrays.toString(ys));
+                            diagPrinted++;
+                        }
+                    } else shapedHeightExactTiles++;
+                }
+                textured+=appendShaped(shaped,pos,col,uv,tex,idx); shapedCount++;
+            }
             else if(simple!=null){ if(appendSimple(chunk,plane,mx,my,simple,pos,col,uv,tex,idx)) textured+=2; simpleCount++; }
             else { appendFallback(chunk,plane,mx,my,pos,col,uv,tex,idx); fallback++; }
         }
         System.out.println("[OPENGL-TERRAIN] chunk="+(chunk.offsetX/64)+","+(chunk.offsetY/64)+" simple="+simpleCount+" shaped="+shapedCount+" fallback="+fallback+" texturedTriangles="+textured+" triangles="+(idx.size/3));
+        if(shapedCount>0) System.out.println("[OPENGL-SHAPED-HEIGHT-SUMMARY] chunk="+(chunk.offsetX/64)+","+(chunk.offsetY/64)+" exact="+shapedHeightExactTiles+" mismatch="+shapedHeightMismatchTiles+" unexpected="+shapedHeightUnexpectedTiles+" maxSpreadDelta="+maxShapedDelta+" (diagnostic only; rendering unchanged)");
         return new TerrainMeshSnapshot(pos.toArray(),col.toArray(),uv.toArray(),tex.toArray(),idx.toArray());
     }
 
@@ -83,9 +106,13 @@ public final class TerrainMeshBuilder {
     private static void appendFallback(Chunk chunk,int plane,int x,int y,FloatCollector p,FloatCollector c,FloatCollector uv,FloatCollector tex,IntCollector ind){
         float x0=x*TILE_SIZE,x1=(x+1)*TILE_SIZE,z0=y*TILE_SIZE,z1=(y+1)*TILE_SIZE;
         float h00=-chunk.mapRegion.tileHeights[plane][x][y],h10=-chunk.mapRegion.tileHeights[plane][x+1][y],h01=-chunk.mapRegion.tileHeights[plane][x][y+1],h11=-chunk.mapRegion.tileHeights[plane][x+1][y+1]; int rgb=resolveTileRgb(chunk,plane,x,y),base=p.size/3;
-        vertex(p,c,uv,tex,x0,h00,z0,rgb,-1);vertex(p,c,uv,tex,x0,h01,z1,rgb,-1);vertex(p,c,uv,tex,x1,h10,z0,rgb,-1);vertex(p,c,uv,tex,x1,h10,z0,rgb,-1);vertex(p,c,uv,tex,x0,h01,z1,rgb,-1);vertex(p,c,uv,tex,x1,h11,z1,rgb,-1);
+        vertex(p,c,uv,tex,x0,h00,z0,rgb,-1);vertex(p,c,uv,tex,x0,h01,z1,rgb,-1);vertex(p,c,uv,tex,x1,h10,z0,rgb,-1);vertex(p,c,uv,tex,x1,h10,z0,eastSafe(h10),z0,rgb,-1);
+        // Preserve the original two-triangle tile topology.
+        vertex(p,c,uv,tex,x0,h01,z1,rgb,-1);vertex(p,c,uv,tex,x1,h11,z1,rgb,-1);
         for(int i=0;i<6;i++)ind.add(base+i);
     }
+
+    private static float eastSafe(float h){return h;}
 
     private static void vertex(FloatCollector p,FloatCollector c,FloatCollector uv,FloatCollector tex,float x,float y,float z,int rgb,int textureId){
         p.add(x);p.add(y);p.add(z); c.add(((rgb>>16)&255)/255f);c.add(((rgb>>8)&255)/255f);c.add((rgb&255)/255f);
