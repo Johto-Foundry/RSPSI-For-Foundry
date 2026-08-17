@@ -1,0 +1,162 @@
+package com.rspsi.openglprototype;
+
+import com.jagex.Client;
+import com.jagex.cache.def.Floor;
+import com.jagex.cache.loader.floor.FloorDefinitionLoader;
+import com.jagex.chunk.Chunk;
+import com.jagex.draw.raster.GameRasterizer;
+import com.jagex.map.SceneGraph;
+import com.jagex.map.tile.SceneTile;
+import com.jagex.map.tile.ShapedTile;
+import com.jagex.map.tile.SimpleTile;
+import java.util.Arrays;
+
+/** Converts RSPSi's already-built SceneGraph terrain into a GPU-ready mesh. */
+public final class TerrainMeshBuilder {
+    private static final int CHUNK_SIZE=64;
+    private static final float TILE_SIZE=128.0f;
+    private static final int HIDDEN_COLOUR=0xbc614e;
+    private TerrainMeshBuilder(){}
+
+    public static TerrainMeshSnapshot build(Chunk chunk,int plane){
+        Client client=Client.getSingleton(); SceneGraph graph=client==null?null:client.sceneGraph;
+        if(chunk==null||chunk.mapRegion==null||graph==null) return empty();
+        FloatCollector pos=new FloatCollector(CHUNK_SIZE*CHUNK_SIZE*54), col=new FloatCollector(CHUNK_SIZE*CHUNK_SIZE*54), uv=new FloatCollector(CHUNK_SIZE*CHUNK_SIZE*36), tex=new FloatCollector(CHUNK_SIZE*CHUNK_SIZE*18);
+        IntCollector idx=new IntCollector(CHUNK_SIZE*CHUNK_SIZE*18);
+        int voidSkipped=0, shapedCount=0, simpleCount=0, textured=0;
+        int shapedHeightMismatchTiles=0, shapedHeightUnexpectedTiles=0, shapedHeightExactTiles=0;
+        int maxShapedDelta=0;
+        int diagPrinted=0;
+        for(int ly=0;ly<CHUNK_SIZE;ly++) for(int lx=0;lx<CHUNK_SIZE;lx++){
+            int mx=chunk.offsetX+lx,my=chunk.offsetY+ly; SceneTile tile=null;
+            if(plane>=0&&plane<graph.tiles.length&&mx>=0&&mx<graph.width&&my>=0&&my<graph.length) tile=graph.tiles[plane][mx][my];
+
+            /*
+             * Match SceneGraph.renderTile's floor-choice order exactly. RSPSi does NOT
+             * independently resolve a shaped and simple tile and then prefer shaped.
+             * It chooses one source in this order:
+             *   temporarySimple -> temporaryShaped -> simple -> shaped.
+             * The old OpenGL builder could therefore render a shaped/overlay surface
+             * where RSPSi was actually rendering the simple/temporary surface instead.
+             */
+            SimpleTile simple=null;
+            ShapedTile shaped=null;
+            if(tile!=null){
+                if(tile.temporarySimpleTile.isPresent()) simple=tile.temporarySimpleTile.get();
+                else if(tile.temporaryShapedTile.isPresent()) shaped=tile.temporaryShapedTile.get();
+                else if(tile.simple!=null) simple=tile.simple;
+                else if(tile.shape!=null) shaped=tile.shape;
+            }
+
+            if(simple!=null){ textured+=appendSimple(chunk,plane,mx,my,simple,pos,col,uv,tex,idx); simpleCount++; }
+            else if(shaped!=null&&shaped.getTriangleA()!=null){
+                int[] ys=shaped.getOrigVertexY();
+                if(ys!=null&&ys.length>0&&mx>=0&&my>=0&&mx+1<chunk.mapRegion.tileHeights[plane].length&&my+1<chunk.mapRegion.tileHeights[plane][mx].length){
+                    int h00=chunk.mapRegion.tileHeights[plane][mx][my], h10=chunk.mapRegion.tileHeights[plane][mx+1][my], h01=chunk.mapRegion.tileHeights[plane][mx][my+1], h11=chunk.mapRegion.tileHeights[plane][mx+1][my+1];
+                    int rawMin=Math.min(Math.min(h00,h10),Math.min(h01,h11)), rawMax=Math.max(Math.max(h00,h10),Math.max(h01,h11));
+                    int shapedMin=ys[0], shapedMax=ys[0];
+                    boolean unexpected=false;
+                    for(int y:ys){ shapedMin=Math.min(shapedMin,y); shapedMax=Math.max(shapedMax,y); if(y<rawMin||y>rawMax) unexpected=true; }
+                    int rawSpread=rawMax-rawMin, shapedSpread=shapedMax-shapedMin;
+                    int delta=Math.abs(shapedSpread-rawSpread); maxShapedDelta=Math.max(maxShapedDelta,delta);
+                    if(unexpected||delta!=0){
+                        shapedHeightMismatchTiles++; if(unexpected)shapedHeightUnexpectedTiles++;
+                        if(diagPrinted<40){
+                            System.out.println("[OPENGL-SHAPED-HEIGHT] chunk="+(chunk.offsetX/64)+","+(chunk.offsetY/64)+" tile="+mx+","+my+" local="+lx+","+ly+" rawCorners=["+h00+","+h10+","+h01+","+h11+"] rawRange="+rawMin+".."+rawMax+" rawSpread="+rawSpread+" shapedRange="+shapedMin+".."+shapedMax+" shapedSpread="+shapedSpread+" unexpected="+unexpected+" vertices="+Arrays.toString(ys));
+                            diagPrinted++;
+                        }
+                    } else shapedHeightExactTiles++;
+                }
+                textured+=appendShaped(shaped,pos,col,uv,tex,idx); shapedCount++;
+            }
+            else {
+                /* SceneGraph is the rendering source of truth: no scene floor => no GPU terrain. */
+                voidSkipped++;
+            }
+        }
+        System.out.println("[OPENGL-TERRAIN] chunk="+(chunk.offsetX/64)+","+(chunk.offsetY/64)+" simple="+simpleCount+" shaped="+shapedCount+" voidSkipped="+voidSkipped+" texturedTriangles="+textured+" triangles="+(idx.size/3));
+        if(shapedCount>0) System.out.println("[OPENGL-SHAPED-HEIGHT-SUMMARY] chunk="+(chunk.offsetX/64)+","+(chunk.offsetY/64)+" exact="+shapedHeightExactTiles+" mismatch="+shapedHeightMismatchTiles+" unexpected="+shapedHeightUnexpectedTiles+" maxSpreadDelta="+maxShapedDelta+" (diagnostic only; rendering unchanged)");
+        return new TerrainMeshSnapshot(pos.toArray(),col.toArray(),uv.toArray(),tex.toArray(),idx.toArray());
+    }
+
+    private static TerrainMeshSnapshot empty(){ return new TerrainMeshSnapshot(new float[0],new float[0],new float[0],new float[0],new int[0]); }
+
+    private static int appendShaped(ShapedTile t,FloatCollector p,FloatCollector c,FloatCollector uv,FloatCollector tex,IntCollector ind){
+        int[] xs=t.getOrigVertexX(),ys=t.getOrigVertexY(),zs=t.getOrigVertexZ(),a=t.getTriangleA(),b=t.getTriangleB(),cc=t.getTriangleC(),ha=t.getTriangleHslA(),hb=t.getTriangleHslB(),hc=t.getTriangleHslC(),textures=t.getTriangleTexture(),display=t.getDisplayColor();
+        if(xs==null||ys==null||zs==null||a==null||b==null||cc==null)return 0;
+        int textured=0;
+        for(int tri=0;tri<a.length;tri++){
+            int ia=a[tri],ib=b[tri],ic=cc[tri]; if(!valid(ia,xs.length)||!valid(ib,xs.length)||!valid(ic,xs.length))continue;
+            int requestedTextureId=(textures!=null&&tri<textures.length)?textures[tri]:-1;
+
+            int rawA=ha!=null&&tri<ha.length?ha[tri]:HIDDEN_COLOUR;
+            if(requestedTextureId<0&&rawA==HIDDEN_COLOUR) continue;
+
+            boolean hasTexture=requestedTextureId>=0;
+            int textureId=requestedTextureId;
+            if(hasTexture)textured++;
+            int fb=t.getUnderlayColour(); if(requestedTextureId>=0){ if(display!=null&&tri<display.length)fb=paletteRgb(display[tri],t.getTextureColour()); else fb=paletteRgb(t.getTextureColour(),t.getUnderlayColour()); }
+            int ca=rawA, cb=hb!=null&&tri<hb.length?hb[tri]:fb, cv=hc!=null&&tri<hc.length?hc[tri]:fb;
+            int base=p.size/3;
+            vertex(p,c,uv,tex,xs[ia],-ys[ia],zs[ia],paletteRgb(ca,fb),textureId);
+            vertex(p,c,uv,tex,xs[ib],-ys[ib],zs[ib],paletteRgb(cb,fb),textureId);
+            vertex(p,c,uv,tex,xs[ic],-ys[ic],zs[ic],paletteRgb(cv,fb),textureId);
+            ind.add(base);ind.add(base+1);ind.add(base+2);
+        }
+        return textured;
+    }
+
+    private static int appendSimple(Chunk chunk,int plane,int x,int y,SimpleTile t,FloatCollector p,FloatCollector c,FloatCollector uv,FloatCollector tex,IntCollector ind){
+        float x0=x*TILE_SIZE,x1=(x+1)*TILE_SIZE,z0=y*TILE_SIZE,z1=(y+1)*TILE_SIZE;
+        float h00=-chunk.mapRegion.tileHeights[plane][x][y],h10=-chunk.mapRegion.tileHeights[plane][x+1][y],h01=-chunk.mapRegion.tileHeights[plane][x][y+1],h11=-chunk.mapRegion.tileHeights[plane][x+1][y+1];
+        int floor=resolveTileRgb(chunk,plane,x,y);
+        boolean requestedTexture=t.isTextured()&&t.getTexture()>=0;
+        boolean hasTexture=requestedTexture;
+        int textureId=requestedTexture?t.getTexture():-1;
+        int fb=requestedTexture?paletteRgb(t.getColour(),floor):floor;
+        int rawCentre=t.getCentreColour(), rawEast=t.getEastColour(), rawNorth=t.getNorthColour(), rawNe=t.getNorthEastColour();
+        int centre=paletteRgb(rawCentre,fb),east=paletteRgb(rawEast,fb),north=paletteRgb(rawNorth,fb),ne=paletteRgb(rawNe,fb);
+        int texturedTriangles=0;
+
+        /*
+         * RSPSi runs SceneGraph.lowMemory=true by default. In renderPlainTile that
+         * means even a tile carrying a texture ID goes through the shaded path, and
+         * 0xbc614e still means "do not draw this half of the tile". The previous
+         * `requestedTexture || ...` exception was fabricating exactly the static
+         * overlay-coloured wedges that remain over the Wilderness ditch/GE opening.
+         */
+        if(rawCentre!=HIDDEN_COLOUR){
+            int base=p.size/3;
+            vertex(p,c,uv,tex,x0,h00,z0,centre,textureId); vertex(p,c,uv,tex,x0,h01,z1,north,textureId); vertex(p,c,uv,tex,x1,h10,z0,east,textureId);
+            ind.add(base);ind.add(base+1);ind.add(base+2);
+            if(hasTexture)texturedTriangles++;
+        }
+
+        if(rawNe!=HIDDEN_COLOUR){
+            int base=p.size/3;
+            vertex(p,c,uv,tex,x1,h10,z0,east,textureId); vertex(p,c,uv,tex,x0,h01,z1,north,textureId); vertex(p,c,uv,tex,x1,h11,z1,ne,textureId);
+            ind.add(base);ind.add(base+1);ind.add(base+2);
+            if(hasTexture)texturedTriangles++;
+        }
+        return texturedTriangles;
+    }
+
+    private static void vertex(FloatCollector p,FloatCollector c,FloatCollector uv,FloatCollector tex,float x,float y,float z,int rgb,int textureId){
+        p.add(x);p.add(y);p.add(z); c.add(((rgb>>16)&255)/255f);c.add(((rgb>>8)&255)/255f);c.add((rgb&255)/255f);
+        uv.add(x/TILE_SIZE);uv.add(z/TILE_SIZE); tex.add(textureId);
+    }
+
+    private static boolean valid(int i,int n){return i>=0&&i<n;}
+    private static int paletteRgb(int hsl,int fallback){
+        if(hsl==HIDDEN_COLOUR||hsl<0)return sanitise(fallback); GameRasterizer r=GameRasterizer.getInstance();
+        if(r!=null&&r.colourPalette!=null&&hsl<r.colourPalette.length){int rgb=r.colourPalette[hsl];if((rgb&0xffffff)!=0)return sanitise(rgb);} return sanitise(fallback);
+    }
+    private static int resolveTileRgb(Chunk chunk,int plane,int x,int y){
+        int ov=chunk.mapRegion.overlays[plane][x][y]&255; if(ov>0&&FloorDefinitionLoader.instance!=null){Floor f=FloorDefinitionLoader.getOverlay(ov-1);if(f!=null){int second=f.getAnotherRgb();if(second>=0&&second!=0xff00ff)return sanitise(second);return sanitise(f.getRgb());}}
+        int un=chunk.mapRegion.underlays[plane][x][y]&255; if(un>0&&FloorDefinitionLoader.instance!=null){Floor f=FloorDefinitionLoader.getUnderlay(un-1);if(f!=null)return sanitise(f.getRgb());} return 0x6f8f43;
+    }
+    private static int sanitise(int rgb){if(rgb<0||rgb==0xff00ff||rgb==HIDDEN_COLOUR||(rgb&0xffffff)==0)return 0x6f8f43;return rgb&0xffffff;}
+
+    private static final class FloatCollector{private float[] data;private int size;FloatCollector(int cap){data=new float[Math.max(cap,32)];}void add(float v){if(size==data.length)data=Arrays.copyOf(data,data.length*2);data[size++]=v;}float[] toArray(){return Arrays.copyOf(data,size);}}
+    private static final class IntCollector{private int[] data;private int size;IntCollector(int cap){data=new int[Math.max(cap,32)];}void add(int v){if(size==data.length)data=Arrays.copyOf(data,data.length*2);data[size++]=v;}int[] toArray(){return Arrays.copyOf(data,size);}}
+}

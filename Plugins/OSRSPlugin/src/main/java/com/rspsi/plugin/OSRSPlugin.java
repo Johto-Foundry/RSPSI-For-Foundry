@@ -1,7 +1,6 @@
 package com.rspsi.plugin;
 
 import org.displee.cache.index.Index;
-import org.displee.cache.index.archive.Archive;
 
 import com.jagex.Client;
 import com.jagex.cache.loader.anim.AnimationDefinitionLoader;
@@ -16,6 +15,7 @@ import com.jagex.cache.loader.object.ObjectDefinitionLoader;
 import com.jagex.cache.loader.textures.TextureLoader;
 import com.jagex.net.ResourceResponse;
 import com.rspsi.cache.CacheFileType;
+import com.rspsi.openglprototype.LiveTerrainPreview;
 import com.rspsi.plugin.loader.AnimationDefinitionLoaderOSRS;
 import com.rspsi.plugin.loader.FloorDefinitionLoaderOSRS;
 import com.rspsi.plugin.loader.FrameBaseLoaderOSRS;
@@ -27,6 +27,9 @@ import com.rspsi.plugin.loader.RSAreaLoaderOSRS;
 import com.rspsi.plugin.loader.TextureLoaderOSRS;
 import com.rspsi.plugin.loader.VarbitLoaderOSRS;
 import com.rspsi.plugins.ClientPlugin;
+
+import javafx.scene.input.KeyCode;
+import javafx.scene.input.KeyEvent;
 
 public class OSRSPlugin implements ClientPlugin {
 
@@ -94,7 +97,15 @@ public class OSRSPlugin implements ClientPlugin {
 			Index textureIndex = client.getCache().readFile(CacheFileType.TEXTURE);
 			Index spriteIndex = client.getCache().readFile(CacheFileType.SPRITE);
 			textureLoader.init(textureIndex.getArchive(0), spriteIndex);
-			
+
+			client.getGameCanvas().addEventHandler(KeyEvent.KEY_PRESSED, event -> {
+				if (event.getCode() == KeyCode.F10) {
+					System.out.println("[OPENGL-LIVE] F10 pressed - opening GPU terrain preview.");
+					LiveTerrainPreview.open(client);
+					event.consume();
+				}
+			});
+			System.out.println("[OPENGL-LIVE] Press F10 in the map viewport to open the experimental GPU terrain view.");
 
 	}
 

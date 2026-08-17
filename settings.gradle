@@ -4,6 +4,7 @@ include ':Client'
 include ':Editor'
 include ':Plugins'
 include ':RS-Cache-Library'
+include ':OpenGLPrototype'
 
 include 'Plugins:OSRS317Plugin'
 include 'Plugins:OSRSPlugin'
