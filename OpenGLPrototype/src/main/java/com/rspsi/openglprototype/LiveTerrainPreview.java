@@ -115,6 +115,7 @@ public final class LiveTerrainPreview implements GLEventListener {
         float aspect=viewportHeight<=0?1.0f:(float)viewportWidth/(float)viewportHeight;
         CameraSnapshot camera=null;
         if(orbitOverride)buildOrbitCamera(aspect);else{camera=readStableCamera();buildRspsiCamera(aspect,camera);}
+        if(!orbitOverride)ObjectRenderDiagnostics.evaluateVisibility(viewProjection);
         shader.use(gl);shader.setViewProjection(gl,viewProjection);
         for(TerrainGpuBuffer b:terrain)b.draw(gl);
         if(objects!=null)objects.draw(gl);
