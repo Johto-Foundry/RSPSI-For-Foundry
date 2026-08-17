@@ -105,10 +105,9 @@ public final class LiveTerrainPreview implements GLEventListener {
         }
 
         System.out.println("[OPENGL-LIVE] GPU terrain chunks uploaded: "+uploaded+" | plane="+plane);
-        System.out.println("[OPENGL-LIVE] GPU object pass: "+(objects==null?"empty":"uploaded")+" (RSPSi projected face visibility enabled).");
+        System.out.println("[OPENGL-LIVE] GPU object pass: "+(objects==null?"empty":"uploaded")+" (RSPSi projected face visibility sign test enabled).");
         System.out.println("[OPENGL-LIVE] Camera follows RSPSi with horizontal mirror correction.");
         System.out.println("[OPENGL-LIVE] RSPSi 50-unit near plane is used for the mirrored editor camera.");
-        System.out.println("[OPENGL-LIVE] Object depth bias test enabled (-1,-1) to probe terrain/object overlap.");
         System.out.println("[OPENGL-LIVE] Max-pitch endpoint is clamped one camera unit for stability.");
     }
 
@@ -121,14 +120,7 @@ public final class LiveTerrainPreview implements GLEventListener {
         shader.use(gl);shader.setViewProjection(gl,viewProjection);
         shader.setObjectPass(gl,false);
         for(TerrainGpuBuffer b:terrain)b.draw(gl);
-        if(objects!=null){
-            shader.setObjectPass(gl,true);
-            gl.glEnable(GL.GL_POLYGON_OFFSET_FILL);
-            gl.glPolygonOffset(-1.0f,-1.0f);
-            objects.draw(gl);
-            gl.glDisable(GL.GL_POLYGON_OFFSET_FILL);
-            shader.setObjectPass(gl,false);
-        }
+        if(objects!=null){shader.setObjectPass(gl,true);objects.draw(gl);shader.setObjectPass(gl,false);}
         frames++;long now=System.nanoTime();if(now-lastFpsNanos>=1_000_000_000L){
             String pos=camera==null?(client.xCameraPos/128)+","+(client.yCameraPos/128)+","+client.zCameraPos:(camera.x/128)+","+(camera.z/128)+","+camera.height;
             System.out.println("[OPENGL-LIVE] FPS: "+frames+" | terrainChunks="+terrain.size()+" | objects="+(objects==null?0:1)+" | camera="+(orbitOverride?"orbit":"rspsi")+" | pos="+pos+" | pitch="+(camera==null?client.yCameraCurve:camera.pitch));
