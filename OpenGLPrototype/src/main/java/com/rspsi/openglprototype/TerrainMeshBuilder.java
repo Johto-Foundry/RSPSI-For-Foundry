@@ -106,13 +106,10 @@ public final class TerrainMeshBuilder {
     private static void appendFallback(Chunk chunk,int plane,int x,int y,FloatCollector p,FloatCollector c,FloatCollector uv,FloatCollector tex,IntCollector ind){
         float x0=x*TILE_SIZE,x1=(x+1)*TILE_SIZE,z0=y*TILE_SIZE,z1=(y+1)*TILE_SIZE;
         float h00=-chunk.mapRegion.tileHeights[plane][x][y],h10=-chunk.mapRegion.tileHeights[plane][x+1][y],h01=-chunk.mapRegion.tileHeights[plane][x][y+1],h11=-chunk.mapRegion.tileHeights[plane][x+1][y+1]; int rgb=resolveTileRgb(chunk,plane,x,y),base=p.size/3;
-        vertex(p,c,uv,tex,x0,h00,z0,rgb,-1);vertex(p,c,uv,tex,x0,h01,z1,rgb,-1);vertex(p,c,uv,tex,x1,h10,z0,rgb,-1);vertex(p,c,uv,tex,x1,h10,z0,eastSafe(h10),z0,rgb,-1);
-        // Preserve the original two-triangle tile topology.
+        vertex(p,c,uv,tex,x0,h00,z0,rgb,-1);vertex(p,c,uv,tex,x0,h01,z1,rgb,-1);vertex(p,c,uv,tex,x1,h10,z0,rgb,-1);vertex(p,c,uv,tex,x1,h10,z0,rgb,-1);
         vertex(p,c,uv,tex,x0,h01,z1,rgb,-1);vertex(p,c,uv,tex,x1,h11,z1,rgb,-1);
         for(int i=0;i<6;i++)ind.add(base+i);
     }
-
-    private static float eastSafe(float h){return h;}
 
     private static void vertex(FloatCollector p,FloatCollector c,FloatCollector uv,FloatCollector tex,float x,float y,float z,int rgb,int textureId){
         p.add(x);p.add(y);p.add(z); c.add(((rgb>>16)&255)/255f);c.add(((rgb>>8)&255)/255f);c.add((rgb&255)/255f);
