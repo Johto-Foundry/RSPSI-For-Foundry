@@ -105,8 +105,9 @@ public final class LiveTerrainPreview implements GLEventListener {
         }
 
         System.out.println("[OPENGL-LIVE] GPU terrain chunks uploaded: "+uploaded+" | plane="+plane);
-        System.out.println("[OPENGL-LIVE] GPU object pass: "+(objects==null?"empty":"uploaded")+" (coloured/shaded models; model textures next).");
+        System.out.println("[OPENGL-LIVE] GPU object pass: "+(objects==null?"empty":"uploaded")+" (RSPSi projected face visibility enabled).");
         System.out.println("[OPENGL-LIVE] Camera follows RSPSi with horizontal mirror correction.");
+        System.out.println("[OPENGL-LIVE] RSPSi 50-unit near plane is used for the mirrored editor camera.");
         System.out.println("[OPENGL-LIVE] Max-pitch endpoint is clamped one camera unit for stability.");
     }
 
@@ -117,8 +118,9 @@ public final class LiveTerrainPreview implements GLEventListener {
         if(orbitOverride)buildOrbitCamera(aspect);else{camera=readStableCamera();buildRspsiCamera(aspect,camera);}
         if(!orbitOverride)ObjectRenderDiagnostics.evaluateVisibility(viewProjection);
         shader.use(gl);shader.setViewProjection(gl,viewProjection);
+        shader.setObjectPass(gl,false);
         for(TerrainGpuBuffer b:terrain)b.draw(gl);
-        if(objects!=null)objects.draw(gl);
+        if(objects!=null){shader.setObjectPass(gl,true);objects.draw(gl);shader.setObjectPass(gl,false);}
         frames++;long now=System.nanoTime();if(now-lastFpsNanos>=1_000_000_000L){
             String pos=camera==null?(client.xCameraPos/128)+","+(client.yCameraPos/128)+","+client.zCameraPos:(camera.x/128)+","+(camera.z/128)+","+camera.height;
             System.out.println("[OPENGL-LIVE] FPS: "+frames+" | terrainChunks="+terrain.size()+" | objects="+(objects==null?0:1)+" | camera="+(orbitOverride?"orbit":"rspsi")+" | pos="+pos+" | pitch="+(camera==null?client.yCameraCurve:camera.pitch));
@@ -139,7 +141,7 @@ public final class LiveTerrainPreview implements GLEventListener {
         float sinYaw=(float)Math.sin(yaw),cosYaw=(float)Math.cos(yaw),sinPitch=(float)Math.sin(pitch),cosPitch=(float)Math.cos(pitch);
         float dirX=-sinYaw*cosPitch,dirY=-sinPitch,dirZ=cosYaw*cosPitch;
         float upX=-sinYaw*sinPitch,upY=cosPitch,upZ=cosYaw*sinPitch;
-        viewProjection.identity().perspective((float)Math.toRadians(55.0),aspect,16.0f,150000.0f).scale(-1.0f,1.0f,1.0f)
+        viewProjection.identity().perspective((float)Math.toRadians(55.0),aspect,50.0f,150000.0f).scale(-1.0f,1.0f,1.0f)
                 .lookAt(eyeX,eyeY,eyeZ,eyeX+dirX*1024.0f,eyeY+dirY*1024.0f,eyeZ+dirZ*1024.0f,upX,upY,upZ);
     }
 
