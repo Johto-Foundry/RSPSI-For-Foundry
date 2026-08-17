@@ -3,7 +3,6 @@ package com.rspsi.openglprototype;
 import com.jagex.Client;
 import com.jagex.cache.def.Floor;
 import com.jagex.cache.loader.floor.FloorDefinitionLoader;
-import com.jagex.cache.loader.textures.TextureLoader;
 import com.jagex.chunk.Chunk;
 import com.jagex.draw.raster.GameRasterizer;
 import com.jagex.map.SceneGraph;
@@ -85,8 +84,16 @@ public final class TerrainMeshBuilder {
             int rawA=ha!=null&&tri<ha.length?ha[tri]:HIDDEN_COLOUR;
             if(requestedTextureId<0&&rawA==HIDDEN_COLOUR) continue;
 
-            boolean hasTexture=textureAvailable(requestedTextureId);
-            int textureId=hasTexture?requestedTextureId:-1;
+            /*
+             * Do not reinterpret a SceneGraph textured triangle as an untextured
+             * overlay-coloured triangle just because the GPU texture loader cannot
+             * currently supply that texture. That behaviour was introduced by the
+             * old 5c198e9 tree-debug experiment and changes terrain/overlay semantics.
+             * Preserve the SceneGraph's requested texture identity here; texture
+             * availability is a texture-upload concern, not a terrain-shape decision.
+             */
+            boolean hasTexture=requestedTextureId>=0;
+            int textureId=requestedTextureId;
             if(hasTexture)textured++;
             int fb=t.getUnderlayColour(); if(requestedTextureId>=0){ if(display!=null&&tri<display.length)fb=paletteRgb(display[tri],t.getTextureColour()); else fb=paletteRgb(t.getTextureColour(),t.getUnderlayColour()); }
             int ca=rawA, cb=hb!=null&&tri<hb.length?hb[tri]:fb, cv=hc!=null&&tri<hc.length?hc[tri]:fb;
@@ -104,8 +111,8 @@ public final class TerrainMeshBuilder {
         float h00=-chunk.mapRegion.tileHeights[plane][x][y],h10=-chunk.mapRegion.tileHeights[plane][x+1][y],h01=-chunk.mapRegion.tileHeights[plane][x][y+1],h11=-chunk.mapRegion.tileHeights[plane][x+1][y+1];
         int floor=resolveTileRgb(chunk,plane,x,y);
         boolean requestedTexture=t.isTextured()&&t.getTexture()>=0;
-        boolean hasTexture=requestedTexture&&textureAvailable(t.getTexture());
-        int textureId=hasTexture?t.getTexture():-1;
+        boolean hasTexture=requestedTexture;
+        int textureId=requestedTexture?t.getTexture():-1;
         int fb=requestedTexture?paletteRgb(t.getColour(),floor):floor;
         int rawCentre=t.getCentreColour(), rawEast=t.getEastColour(), rawNorth=t.getNorthColour(), rawNe=t.getNorthEastColour();
         int centre=paletteRgb(rawCentre,fb),east=paletteRgb(rawEast,fb),north=paletteRgb(rawNorth,fb),ne=paletteRgb(rawNe,fb);
@@ -127,10 +134,6 @@ public final class TerrainMeshBuilder {
             if(hasTexture)texturedTriangles++;
         }
         return texturedTriangles;
-    }
-
-    private static boolean textureAvailable(int textureId){
-        return textureId>=0&&TextureLoader.instance!=null&&textureId<TextureLoader.instance.count()&&TextureLoader.getTexture(textureId)!=null;
     }
 
     private static void vertex(FloatCollector p,FloatCollector c,FloatCollector uv,FloatCollector tex,float x,float y,float z,int rgb,int textureId){
