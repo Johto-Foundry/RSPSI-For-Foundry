@@ -2,6 +2,7 @@ package com.rspsi.openglprototype;
 
 import com.jagex.Client;
 import com.jagex.chunk.Chunk;
+import com.jagex.util.Constants;
 import com.jogamp.newt.event.MouseAdapter;
 import com.jogamp.newt.event.MouseEvent;
 import com.jogamp.newt.event.WindowAdapter;
@@ -105,9 +106,9 @@ public final class LiveTerrainPreview implements GLEventListener {
         }
 
         System.out.println("[OPENGL-LIVE] GPU terrain chunks uploaded: "+uploaded+" | plane="+plane);
-        System.out.println("[OPENGL-LIVE] GPU object pass: "+(objects==null?"empty":"uploaded")+" (RSPSi projected face visibility sign test enabled).");
+        System.out.println("[OPENGL-LIVE] GPU object pass: "+(objects==null?"empty":"uploaded")+" (exact RS integer-projection face visibility enabled).");
         System.out.println("[OPENGL-LIVE] Camera follows RSPSi with horizontal mirror correction.");
-        System.out.println("[OPENGL-LIVE] RSPSi 50-unit near plane is used for the mirrored editor camera.");
+        System.out.println("[OPENGL-LIVE] Object visibility now uses RSPSi fixed-point yaw/pitch + 512/z projection, independent of GL/NDC winding.");
         System.out.println("[OPENGL-LIVE] Max-pitch endpoint is clamped one camera unit for stability.");
     }
 
@@ -118,9 +119,16 @@ public final class LiveTerrainPreview implements GLEventListener {
         if(orbitOverride)buildOrbitCamera(aspect);else{camera=readStableCamera();buildRspsiCamera(aspect,camera);}
         if(!orbitOverride)ObjectRenderDiagnostics.evaluateVisibility(viewProjection);
         shader.use(gl);shader.setViewProjection(gl,viewProjection);
+        if(camera!=null){
+            int yaw=camera.yaw&0x7ff;
+            int stablePitch=(camera.pitch>=383?382:camera.pitch)&0x7ff;
+            shader.setRsCamera(gl,camera.x,camera.z,camera.height,
+                    Constants.SINE[yaw],Constants.COSINE[yaw],
+                    Constants.SINE[stablePitch],Constants.COSINE[stablePitch]);
+        }
         shader.setObjectPass(gl,false);
         for(TerrainGpuBuffer b:terrain)b.draw(gl);
-        if(objects!=null){shader.setObjectPass(gl,true);objects.draw(gl);shader.setObjectPass(gl,false);}
+        if(objects!=null){shader.setObjectPass(gl,camera!=null);objects.draw(gl);shader.setObjectPass(gl,false);}
         frames++;long now=System.nanoTime();if(now-lastFpsNanos>=1_000_000_000L){
             String pos=camera==null?(client.xCameraPos/128)+","+(client.yCameraPos/128)+","+client.zCameraPos:(camera.x/128)+","+(camera.z/128)+","+camera.height;
             System.out.println("[OPENGL-LIVE] FPS: "+frames+" | terrainChunks="+terrain.size()+" | objects="+(objects==null?0:1)+" | camera="+(orbitOverride?"orbit":"rspsi")+" | pos="+pos+" | pitch="+(camera==null?client.yCameraCurve:camera.pitch));
